@@ -1,0 +1,3 @@
+# Logless
+
+Bye bye logs
