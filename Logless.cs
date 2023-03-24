@@ -4,7 +4,6 @@ using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using BepInEx;
-using BepInEx.Logging;
 using HarmonyLib;
 
 namespace Logless
@@ -15,18 +14,10 @@ namespace Logless
     [BepInPlugin(PluginInfo.PLUGIN_GUID, PluginInfo.PLUGIN_NAME, PluginInfo.PLUGIN_VERSION)]
     public class Plugin : BaseUnityPlugin
     {
-        // Using GUID for the Harmony instance, so that we can unpatch just this plugin if needed
         private readonly Assembly _assembly = Assembly.GetExecutingAssembly();
         private readonly Harmony _harmony = new(PluginInfo.PLUGIN_GUID);
-
-        internal new static ManualLogSource Logger;
-
-        // When the plugin is loaded
+        
         public void Awake() {
-            // Create masking Logger as internal to use more easily in code
-            Logger = base.Logger;
-            
-            // Inject custom js and patch c#
             try {
                 Patch();
             }
@@ -35,12 +26,9 @@ namespace Logless
                 throw;
             }
             
-            // All done!
             Logger.LogInfo($"Plugin {PluginInfo.PLUGIN_GUID} is loaded!");
         }
 
-        // Unpatch if plugin is destroyed to handle in-game plugin reloads
-        // Remove files we created
         public void OnDestroy() {
             UnPatch();
         }
@@ -49,7 +37,6 @@ namespace Logless
             _harmony.PatchAll(_assembly);
         }
 
-        // Undoes what Patch() did
         private void UnPatch() {
             _harmony.UnpatchSelf();
         }
@@ -76,7 +63,7 @@ namespace Logless
         }
         
         [HarmonyPrefix]
-        private static bool Prefix(MethodBase __originalMethod) {
+        private static bool Prefix() {
             return false;
         }
     }
@@ -102,7 +89,7 @@ namespace Logless
         }
         
         [HarmonyPrefix]
-        private static bool Prefix(MethodBase __originalMethod) {
+        private static bool Prefix() {
             return false;
         }
     }

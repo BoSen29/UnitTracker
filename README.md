@@ -1,3 +1,3 @@
 # Logless
 
-Bye bye logs
+Removes all logs from the game

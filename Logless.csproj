@@ -2,8 +2,8 @@
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
     <AssemblyName>Logless</AssemblyName>
-    <Description>This Logless mod</Description>
-    <Version>1.0.0</Version>
+    <Description>Removes all logs from the game</Description>
+    <Version>1.0.1</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
     <PackageId>ltd2.mods.Kidev.Logless</PackageId>
