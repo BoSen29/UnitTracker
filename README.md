@@ -1,4 +1,4 @@
-# UnitTracker
+# UnitTracker for Legion TD 2
 
 Forked from LogLess https://github.com/LegionTD2-Modding/Logless
 
