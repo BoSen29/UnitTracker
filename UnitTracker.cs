@@ -26,6 +26,8 @@ using System.Net.Http;
 using System.Text;
 using System.Net.Sockets;
 using System.IO;
+using aag.Natives.Lib.Networking.Messages;
+using BepInEx.Configuration;
 
 namespace Logless
 {
@@ -42,50 +44,67 @@ namespace Logless
         private int waveNumber = 0;
         private List<LTDPlayer> lTDPlayers = new List<LTDPlayer>();
         private HttpClient _client = new HttpClient();
-        private JsonConfig _jsonConfig;
         private bool _configured = false;
-
+        private bool _waveSet = false;
+        private ConfigEntry<string> configUrl;
+        private ConfigEntry<string> configJwt;
+        private ConfigEntry<int> configStreamDelay;
+        private int maxUnitsSeen = 0;
+        private bool _shouldPost = false;
         public void Awake() {
-            FileInfo config = new FileInfo(AppDomain.CurrentDomain.BaseDirectory + @"\BepInEx\config\" + "UnitTracker.json"); // should be a jsonfile in the bepinex config folder
-            if (config.Exists) 
-            {
-                try
-                {
-                    this._jsonConfig = Newtonsoft.Json.JsonConvert.DeserializeObject<JsonConfig>(File.ReadAllText(config.FullName));
+            configUrl = Config.Bind("General", "URL", "https://ltd2.krettur.no/v2/jwtbadboi", "HTTPS endpoint to post the gamestate, default is the extension used by the Twitch Overlay.");
+            configJwt = Config.Bind("General", "JWT", "", "JWT to authenticate your data, reach out to @bosen in discord to get your token for the Twitch Overlay.");
+            configStreamDelay = Config.Bind("General", "StreamDelay", 0, "Delay before data is pushed, in seconds. Set this equal to the delay configued in OBS / Stream Labs to prevent the overlay showing information from the future");
 
-                    if (_jsonConfig.jwt != null && _jsonConfig.url != null)
-                    {
-                        try
-                        {
-                            Patch();
-                            this._configured = true;
-                            _client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _jsonConfig.jwt);
-                        }
-                        catch (Exception e)
-                        {
-                            Logger.LogError($"Error while injecting or patching UnitTracker: {e}");
-                            throw;
-                        }
-                        Logger.LogInfo($"Plugin {"UnitTracker"} is loaded!");
-                        sp.Start();
-                    }
-                    else
-                    {
-                        Console.WriteLine("Missing basic configuration, skipping patching of UnitTracker.");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogError("Isses with patching: " + ex.Message);
-                    throw;
-                }
-            }
-            else
+            if (String.IsNullOrEmpty(configJwt.Value))
             {
-                Console.WriteLine("Config missing, creating empty one. Skipping patching of UnitTracker");
-                File.WriteAllText(config.FullName, Newtonsoft.Json.JsonConvert.SerializeObject(new JsonConfig()));
+                Console.WriteLine("Missing JWT to send data, skipping patching.");
+                return;
             }
-           
+            if (String.IsNullOrEmpty(configUrl.Value))
+            {
+                Console.WriteLine("Missing target URL, skipping patching.");
+                return;
+            }
+
+            try
+            {
+                Patch();
+                this._configured = true;
+                _client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", configJwt.Value);
+            }
+            catch (Exception e)
+            {
+                Logger.LogError($"Error while injecting or patching UnitTracker: {e}");
+                throw;
+            }
+            Logger.LogInfo($"Plugin {"UnitTracker"} is loaded!");
+            sp.Start();
+        }
+
+        private void fetchAndPost()
+        {
+            foreach (ushort p in PlayerApi.GetPlayingPlayers())
+            {
+                Console.WriteLine("Fetching for player " + p);
+                LTDPlayer player = this.lTDPlayers.Find(pl => pl.player == p);
+
+                Dictionary<IntVector2, Scoreboard.ScoreboardGridData> data = Scoreboard.GetGridData(p);
+
+                Console.WriteLine("Found " + data.Count + "Entries... adding them to the list");
+                foreach (IntVector2 key in data.Keys)
+                {
+                    player.units.Add(new Unit(key.x, key.y, data[key].UnitType, data[key].Image));
+                }
+
+                List<string> mercs = Assets.States.Components.MercenaryIconHandler.GetMercenaryIconsReceived(p, this.waveNumber);
+
+                foreach (string merc in mercs)
+                {
+                    player.mercenaries.Add(new Recceived(merc));
+                }
+            }
+            postData(new Payload(this.lTDPlayers, this.waveNumber)); // intentional not awating to prevent locking the main thread.
         }
 
         public void Update()
@@ -95,53 +114,67 @@ namespace Logless
                 this._registered = true;
                 Console.WriteLine("Registering event handlers.");
 
-                EnvironmentApi.OnSetLightingTheme += delegate (string theme)
+                HudApi.OnSetWestEnemiesRemaining += (int i) =>
                 {
-                    if (theme == "day")
+                    //Console.WriteLine(WaveInfo.GetWaveInfo(this.waveNumber).AmountSpawned * this.lTDPlayers.FindAll(l => l.player < 5).Count + " and the count is " + i);
+                    if (this._waveSet)
                     {
-                        foreach (ushort p in PlayerApi.GetPlayingPlayers())
+                        double treshold = (WaveInfo.GetWaveInfo(this.waveNumber).AmountSpawned * this.lTDPlayers.FindAll(l => l.player < 5).Count / 1.7);
+                        if (treshold < i)
                         {
-                            LTDPlayer player = this.lTDPlayers.Find(pl => pl.player == p);
-                            Dictionary<IntVector2, Scoreboard.ScoreboardGridData> data = Scoreboard.GetGridData(p);
-
-                            foreach (IntVector2 key in data.Keys)
-                            {
-                                player.units.Add(new Unit( key.x, key.y, data[key].UnitType, data[key].Image));
-                            }
-
-                            List<string> mercs = Assets.States.Components.MercenaryIconHandler.GetMercenaryIconsReceived(p, this.waveNumber);
-
-                            foreach (string merc in mercs)
-                            {
-                                player.mercenaries.Add(new Recceived(merc));
-                            }
+                            maxUnitsSeen = i;
+                            this._waveSet = true;
+                            this._shouldPost = true;
                         }
-                        postData(new Payload(this.lTDPlayers, this.waveNumber)); // intentional not awating to prevent locking the main thread.
                     }
-                    if (theme == "night")
+
+                    if (this._shouldPost && maxUnitsSeen > i || (WaveInfo.GetWaveInfo(this.waveNumber).AmountSpawned * this.lTDPlayers.FindAll(l => l.player < 5).Count) <= i)
                     {
-                        //clear the unit / merc cache and wait for night to update them again.
-                        this.lTDPlayers.ForEach(f => {
-                            f.units.Clear();
-                            f.mercenaries.Clear();
-                        }); 
+                        // indicates that more than 75% of the wave has spawned, and that the number of creeps is decreasing or that mercs equal or greater than the entire wave has spawned.
+                        fetchAndPost();
+                        maxUnitsSeen = 0;
+                        this._waveSet = false;
+                        this._shouldPost = false;
                     }
                 };
+                EnvironmentApi.OnEnableGridOverlay += (bool b) =>
+                {
+                    // subscribe to gridoverlay incase lockwave=true
+                    if (b)
+                    {
+                        this._waveSet = true;
+                        this.lTDPlayers.ForEach(f =>
+                        {
+                            f.units.Clear();
+                            f.mercenaries.Clear();
+                        });
+                    }
+                };
+
+
 
                 HudApi.OnSetWaveNumber += (i) =>
                 {
                     this.waveNumber = i;
+                    this._waveSet = true;
+
+                    this.lTDPlayers.ForEach(f => {
+                        f.units.Clear();
+                        f.mercenaries.Clear();
+                    });
                 };
 
                 HudApi.OnEnteredGame += (SimpleEvent)delegate
                 {
                     Console.WriteLine("Entered new game, fetching players.");
 
+                    this.lTDPlayers.ForEach(p => p.found = false);
                     foreach(ushort player in PlayerApi.GetPlayingPlayers())
                     {
                         int p = this.lTDPlayers.FindIndex(p => p.player == player);
                         LTDPlayer t = p != -1 ? this.lTDPlayers[p] : new LTDPlayer();
 
+                        t.found = true;
 
 
                         if (p == -1)
@@ -171,6 +204,7 @@ namespace Logless
                         }
                     }
 
+                    this.lTDPlayers.RemoveAll(p => p.found != true);
                     this.postData(new Payload(this.lTDPlayers, this.waveNumber)); // intentional non-awaiting async task to prevent hanging up the core thread.
                     
                 };
@@ -185,25 +219,30 @@ namespace Logless
                     t.guild = props.guild;
                     t.image = props.image;
                     t.countryName = Countries.GetCountry(t.countryCode).name;
-                    this.lTDPlayers.Add(t);
+
+                    if (p == -1)
+                    {
+                        this.lTDPlayers.Add(t);
+                    }
+                    
                 };
 
                 sp.Stop();
             }
-
-            
         }
 
         public async Task<bool> postData(Payload data)
         {
-            Console.WriteLine("Posting update to the server");
+            Console.WriteLine("Posting update to the server in " + configStreamDelay.Value + " seconds.");
             string payload = Newtonsoft.Json.JsonConvert.SerializeObject(data);
+            await Task.Delay(configStreamDelay.Value * 1000);
+
             HttpRequestMessage req = new HttpRequestMessage();
             req.Method = HttpMethod.Post;
             req.Content = new StringContent(payload, Encoding.UTF8, "application/json");
-            req.RequestUri = new Uri(this._jsonConfig.url);
+            req.RequestUri = new Uri(configUrl.Value);
             HttpResponseMessage rm = await _client.SendAsync(req);
-
+            // this isn't awaited, so actually no need to return anything
             try
             {
                 rm.EnsureSuccessStatusCode();
@@ -214,12 +253,6 @@ namespace Logless
                 Console.WriteLine(e.Message);
                 return false;
             }
-        }
-
-        public class JsonConfig
-        {
-            public string url;
-            public string jwt;
         }
 
         public class LTDPlayer
@@ -235,6 +268,9 @@ namespace Logless
             public string? countryName { get; set; }
             public string? guildAvatar { get; set; }
             public string? guildAvatarStacks { get; set; }
+
+            [JsonIgnore]
+            public bool found = true;
 
             public List<Unit> units { get; set; } = new List<Unit>();
             public List<Recceived> mercenaries { get; set; } = new List<Recceived>();
@@ -291,5 +327,6 @@ namespace Logless
         private void UnPatch() {
             _harmony.UnpatchSelf();
         }
+
     }
 }
