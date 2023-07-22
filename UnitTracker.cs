@@ -28,6 +28,7 @@ using System.Net.Sockets;
 using System.IO;
 using aag.Natives.Lib.Networking.Messages;
 using BepInEx.Configuration;
+using aag.Natives.Lib.Properties;
 
 namespace Logless
 {
@@ -103,6 +104,8 @@ namespace Logless
                 {
                     player.mercenaries.Add(new Recceived(merc));
                 }
+
+                player.mythiumReceived = Snapshot.PlayerProperties[p].MythiumReceivedPerWave[this.waveNumber];
             }
             postData(new Payload(this.lTDPlayers, this.waveNumber)); // intentional not awating to prevent locking the main thread.
         }
@@ -268,6 +271,8 @@ namespace Logless
             public string? countryName { get; set; }
             public string? guildAvatar { get; set; }
             public string? guildAvatarStacks { get; set; }
+
+            public int? mythiumReceived { get; set; }
 
             [JsonIgnore]
             public bool found = true;
