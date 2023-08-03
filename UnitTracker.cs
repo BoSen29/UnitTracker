@@ -29,9 +29,12 @@ using System.IO;
 using aag.Natives.Lib.Networking.Messages;
 using BepInEx.Configuration;
 using aag.Natives.Lib.Properties;
+using Assets.Features.Dev;
+using System.Text.RegularExpressions;
 
 namespace Logless
 {
+    using static Logless.Plugin;
     using P = Plugin;
 
     [BepInProcess("Legion TD 2.exe")]
@@ -44,6 +47,8 @@ namespace Logless
         private bool _registered = false;
         private int waveNumber = 0;
         private List<LTDPlayer> lTDPlayers = new List<LTDPlayer>();
+        private List<Unit> units = new List<Unit>();
+        private List<Recceived> mercenaries = new List<Recceived>();
         private HttpClient _client = new HttpClient();
         private bool _configured = false;
         private bool _waveSet = false;
@@ -52,10 +57,13 @@ namespace Logless
         private ConfigEntry<int> configStreamDelay;
         private int maxUnitsSeen = 0;
         private bool _shouldPost = false;
+        private string matchUUID = "";
+        private Queue<QueuedItem> _queue = new Queue<QueuedItem>();
+        private List<Leaks> leaks = new List<Leaks>();
         public void Awake() {
-            configUrl = Config.Bind("General", "URL", "https://ltd2.krettur.no/v2/jwtbadboi", "HTTPS endpoint to post the gamestate, default is the extension used by the Twitch Overlay.");
+            configUrl = Config.Bind("General", "UpdateURL", "https://ltd2.krettur.no/v2/update", "HTTPS endpoint to post on waveStarted event, default is the extension used by the Twitch Overlay.");
             configJwt = Config.Bind("General", "JWT", "", "JWT to authenticate your data, reach out to @bosen in discord to get your token for the Twitch Overlay.");
-            configStreamDelay = Config.Bind("General", "StreamDelay", 0, "Delay before data is pushed, in seconds. Set this equal to the delay configued in OBS / Stream Labs to prevent the overlay showing information from the future");
+            configStreamDelay = Config.Bind("General", "StreamDelay", 0, "Delay before data is pushed, in seconds. Set this equal to the delay configued in OBS / Stream Labs to prevent the overlay showing information from the future");;
 
             if (String.IsNullOrEmpty(configJwt.Value))
             {
@@ -83,8 +91,14 @@ namespace Logless
             sp.Start();
         }
 
-        private void fetchAndPost()
+        private void ConfigStreamDelay_SettingChanged(object sender, EventArgs e)
         {
+            throw new NotImplementedException();
+        }
+
+        private void fetchAndPostWaveStartedInfo()
+        {
+            List<MythiumRecceived> mythium = new List<MythiumRecceived>();
             foreach (ushort p in PlayerApi.GetPlayingPlayers())
             {
                 Console.WriteLine("Fetching for player " + p);
@@ -95,19 +109,61 @@ namespace Logless
                 Console.WriteLine("Found " + data.Count + "Entries... adding them to the list");
                 foreach (IntVector2 key in data.Keys)
                 {
-                    player.units.Add(new Unit(key.x, key.y, data[key].UnitType, data[key].Image));
+                    int index = units.FindIndex(u => u.player == p &&  u.x == key.x && u.y == key.y);
+                    if (index == -1)
+                    {
+                        units.Add(new Unit(key.x, key.y, data[key].UnitType, data[key].Image, player.player));
+                    }
                 }
 
                 List<string> mercs = Assets.States.Components.MercenaryIconHandler.GetMercenaryIconsReceived(p, this.waveNumber);
 
                 foreach (string merc in mercs)
                 {
-                    player.mercenaries.Add(new Recceived(merc));
+                    int index = this.mercenaries.FindIndex(r => r.player == player.player && r.image == merc);
+
+                    if (index != -1)
+                    {
+                        this.mercenaries[index].count++;
+                    }
+                    else
+                    {
+                        this.mercenaries.Add(new Recceived(merc, player.player, 1));
+                    }
                 }
 
-                player.mythiumReceived = Snapshot.PlayerProperties[p].MythiumReceivedPerWave[this.waveNumber];
+                mythium.Add(new MythiumRecceived(Snapshot.PlayerProperties[p].MythiumReceivedPerWave[this.waveNumber], p));
             }
-            postData(new Payload(this.lTDPlayers, this.waveNumber)); // intentional not awating to prevent locking the main thread.
+
+
+            if (this.waveNumber > -1)
+            {
+                int leftPercentage = 100;
+                int rightPercentage = 100;
+                try
+                {
+                    UnitProperties left = Snapshot.UnitProperties[HudApi.GetHudSourceUnit(HudSection.LeftKing)];
+                    UnitProperties right = Snapshot.UnitProperties[HudApi.GetHudSourceUnit(HudSection.RightKing)];
+
+                    //leftPercentage = (int)Math.Round(left.Hp.PercentLife); // (int)Math.Round(left.Hp.CurrentLife / left.Hp.MaxLife * 100);
+                    //rightPercentage = (int)Math.Round(right.Hp.PercentLife); //Math.Round(right.Hp.CurrentLife / right.Hp.MaxLife * 100);
+
+                    leftPercentage = (int)Math.Round(left.Hp.GetLastLife(Snapshot.RenderTime) / left.Hp.GetMaxLife(Snapshot.RenderTime) * 100);
+                    rightPercentage = (int)Math.Round(right.Hp.GetLastLife(Snapshot.RenderTime) / right.Hp.GetMaxLife(Snapshot.RenderTime) * 100);
+                    // CurrentLife / MaxLife;
+
+                }
+                catch
+                {
+                    Console.WriteLine("King unavailable, asuming 100%");
+                }
+                this._queue.Enqueue(
+                new QueuedItem(
+                    this.configUrl.Value,
+                    new WaveStartedPayload(this.waveNumber, this.matchUUID, this.units, this.mercenaries, mythium, leftPercentage, rightPercentage),
+                    configStreamDelay.Value
+                ));
+            }
         }
 
         public void Update()
@@ -119,7 +175,6 @@ namespace Logless
 
                 HudApi.OnSetWestEnemiesRemaining += (int i) =>
                 {
-                    //Console.WriteLine(WaveInfo.GetWaveInfo(this.waveNumber).AmountSpawned * this.lTDPlayers.FindAll(l => l.player < 5).Count + " and the count is " + i);
                     if (this._waveSet)
                     {
                         double treshold = (WaveInfo.GetWaveInfo(this.waveNumber).AmountSpawned * this.lTDPlayers.FindAll(l => l.player < 5).Count / 1.7);
@@ -130,46 +185,130 @@ namespace Logless
                             this._shouldPost = true;
                         }
                     }
-
-                    if (this._shouldPost && maxUnitsSeen > i || (WaveInfo.GetWaveInfo(this.waveNumber).AmountSpawned * this.lTDPlayers.FindAll(l => l.player < 5).Count) <= i)
+                    if (this._shouldPost && (maxUnitsSeen > i || (WaveInfo.GetWaveInfo(this.waveNumber).AmountSpawned * this.lTDPlayers.FindAll(l => l.player < 5).Count) <= i))
                     {
                         // indicates that more than 75% of the wave has spawned, and that the number of creeps is decreasing or that mercs equal or greater than the entire wave has spawned.
-                        fetchAndPost();
+                        fetchAndPostWaveStartedInfo();
                         maxUnitsSeen = 0;
                         this._waveSet = false;
                         this._shouldPost = false;
                     }
                 };
-                EnvironmentApi.OnEnableGridOverlay += (bool b) =>
-                {
-                    // subscribe to gridoverlay incase lockwave=true
-                    if (b)
-                    {
-                        this._waveSet = true;
-                        this.lTDPlayers.ForEach(f =>
-                        {
-                            f.units.Clear();
-                            f.mercenaries.Clear();
-                        });
-                    }
-                };
-
-
 
                 HudApi.OnSetWaveNumber += (i) =>
                 {
                     this.waveNumber = i;
                     this._waveSet = true;
+                    this.units.Clear();
+                    this.mercenaries.Clear();
+                    int leftPercentage = 100;
+                    int rightPercentage = 100;
+                    try
+                    {
+                        UnitProperties left = Snapshot.UnitProperties[HudApi.GetHudSourceUnit(HudSection.LeftKing)];
+                        UnitProperties right = Snapshot.UnitProperties[HudApi.GetHudSourceUnit(HudSection.RightKing)];
 
-                    this.lTDPlayers.ForEach(f => {
-                        f.units.Clear();
-                        f.mercenaries.Clear();
+                        leftPercentage = (int)Math.Round(left.Hp.GetLastLife(Snapshot.RenderTime) / left.Hp.GetMaxLife(Snapshot.RenderTime) * 100);
+                        rightPercentage = (int)Math.Round(right.Hp.GetLastLife(Snapshot.RenderTime) / right.Hp.GetMaxLife(Snapshot.RenderTime) * 100);
+                        //leftPercentage = (int)Math.Round(left.Hp.CurrentLife / left.Hp.MaxLife * 100);
+                        //rightPercentage = (int)Math.Round(right.Hp.CurrentLife / right.Hp.MaxLife * 100);
+                    }
+                    catch
+                    {
+                        Console.WriteLine("King unavailable, asuming 100%");
+                    }
+
+                    
+
+                    if (this.waveNumber > 1)
+                    {
+                        this._queue.Enqueue(
+                        new QueuedItem(
+                            this.configUrl.Value,
+                            new WaveCompletedPayload(this.waveNumber - 1, leftPercentage, rightPercentage, this.leaks, false, this.matchUUID),
+                            this.configStreamDelay.Value
+                        ));
+                    }
+
+                    this.leaks.Clear();
+                };
+
+                HudApi.OnRefreshPostGameBuilds += (PostGameBuildsProperties e) =>
+                {
+                    try
+                    {
+                        List<PostGameStatsPlayerBuilds> data = new List<PostGameStatsPlayerBuilds>();
+                        Dictionary<int, int> indexToPlayer = new Dictionary<int, int>();
+                        int n = 0;
+                        this.lTDPlayers.ForEach((p) =>
+                        {
+                            indexToPlayer.Add(n, p.player);
+                            n++;
+                        });
+
+                        e.builds.ForEach(b =>
+                        {
+                            int i = 0;
+
+                            b.playerBuilds.ForEach(c =>
+                            {
+                                try
+                                {
+                                    data.Add(new PostGameStatsPlayerBuilds(c, b.number, indexToPlayer[i]));
+                                }
+                                catch (Exception ex)
+                                {
+                                    Console.WriteLine("Unable to add index for player " + i);
+                                    Console.WriteLine(ex.Message);
+                                }
+                                i++;
+                            });
+                        });
+
+                        int left = (int)Math.Round(e.builds.Last().leftKingPercentHp * 100);
+                        int right = (int)Math.Round(e.builds.Last().rightKingPercentHp * 100);
+                        int last = e.builds.Last().number;
+                        Console.WriteLine("Queueing up a postmatch build summary");
+                        this._queue.Enqueue(new QueuedItem(configUrl.Value, new PostGameStatsPayload(data, left, right, last, this.matchUUID), configStreamDelay.Value));
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("ISSUES IN THE POSTGAMEBUILDS THINGY!");
+                        Console.WriteLine(ex.Message);
+                    }
+                };
+
+                HudApi.OnRefreshPostGameStats += (PostGameStatsProperties e) =>
+                {
+                    Console.WriteLine("PostGameStatsRefreshed, asuming the game ended? Sending final payload.");
+                    
+                    List<MastermindLegion> lmlist = new List<MastermindLegion>();
+
+                    e.leftTeamRows.ForEach(p =>
+                    {
+                        lmlist.Add(new MastermindLegion(p));
                     });
+
+                    e.rightTeamRows.ForEach(p =>
+                    {
+                        lmlist.Add(new MastermindLegion(p));
+                    });
+
+                    if (e.gameId == this.matchUUID)
+                    {
+                        this._queue.Enqueue(new QueuedItem(this.configUrl.Value, new GameCompletedPayload(this.waveNumber, this.leaks, true, this.matchUUID, lmlist), configStreamDelay.Value));
+                    }
+                    else
+                    {
+                        Console.WriteLine("Found some postmatch info that has unknown origin, please advice.");
+                    }                    
                 };
 
                 HudApi.OnEnteredGame += (SimpleEvent)delegate
                 {
                     Console.WriteLine("Entered new game, fetching players.");
+
+                    this.matchUUID = ClientApi.GetServerLogURL().Split('/').Last(); // should return gameid from ConfigApi.GameId which is internal.
 
                     this.lTDPlayers.ForEach(p => p.found = false);
                     foreach(ushort player in PlayerApi.GetPlayingPlayers())
@@ -201,14 +340,18 @@ namespace Logless
                             GuildEntityObjectProperties guild = Snapshot.PlayerProperties[player].GuildProperties;
                             t.guildAvatar = guild.avatar;
                             t.guild = guild.guildName;
-                            // clear incase there is remains from the previous game, as we're not redoing the entire thing here....
-                            t.units.Clear();
-                            t.mercenaries.Clear();
                         }
                     }
+                    this.units.Clear();
+                    this.mercenaries.Clear();
 
                     this.lTDPlayers.RemoveAll(p => p.found != true);
-                    this.postData(new Payload(this.lTDPlayers, this.waveNumber)); // intentional non-awaiting async task to prevent hanging up the core thread.
+
+                    int leftPercentage = 100;
+                    int rightPercentage = 100;
+                    this._queue.Enqueue(new QueuedItem(this.configUrl.Value, new MatchJoinedPayload(this.lTDPlayers, 0, this.matchUUID, leftPercentage, rightPercentage), this.configStreamDelay.Value));
+
+                    // this.postData(new Payload(this.lTDPlayers, this.waveNumber, this.matchUUID)); // intentional non-awaiting async task to prevent hanging up the core thread.
                     
                 };
 
@@ -230,22 +373,41 @@ namespace Logless
                     
                 };
 
+                HudApi.OnDisplayGameText += (string header, string content, float duration, string image) =>
+                {
+                    if (content.Contains("leak"))
+                    {
+                        try
+                        {
+                            this.leaks.Add(new Leaks(
+                                int.Parse(content.Split('%')[0].Split('(').Last()),
+                                int.Parse(content.Split(')')[0].Split('(')[1])
+                                ));
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine("Issues parsing a leak... :seenoevil:");
+                        }
+                        Console.WriteLine("Leak registered!");
+                        Console.WriteLine(content);
+                    }
+                };
+
                 sp.Stop();
+            }
+            if (this._queue.Count > 0 && this._queue.First().runAfter < DateTime.Now)
+            {
+                PostToUrl(this._queue.Dequeue());
             }
         }
 
-        public async Task<bool> postData(Payload data)
+        public async Task<bool> PostToUrl(string url, string serializedBody)
         {
-            Console.WriteLine("Posting update to the server in " + configStreamDelay.Value + " seconds.");
-            string payload = Newtonsoft.Json.JsonConvert.SerializeObject(data);
-            await Task.Delay(configStreamDelay.Value * 1000);
-
             HttpRequestMessage req = new HttpRequestMessage();
             req.Method = HttpMethod.Post;
-            req.Content = new StringContent(payload, Encoding.UTF8, "application/json");
-            req.RequestUri = new Uri(configUrl.Value);
+            req.Content = new StringContent(serializedBody, Encoding.UTF8, "application/json");
+            req.RequestUri = new Uri(url);
             HttpResponseMessage rm = await _client.SendAsync(req);
-            // this isn't awaited, so actually no need to return anything
             try
             {
                 rm.EnsureSuccessStatusCode();
@@ -255,6 +417,113 @@ namespace Logless
             {
                 Console.WriteLine(e.Message);
                 return false;
+            }
+        }
+
+        public async Task<bool> PostToUrl(QueuedItem queuedItem)
+        {
+            HttpRequestMessage req = new HttpRequestMessage();
+            req.Method = HttpMethod.Post;
+            req.Content = new StringContent(queuedItem.serializedBody, Encoding.UTF8, "application/json");
+            req.RequestUri = new Uri(queuedItem.url);
+            HttpResponseMessage rm = await _client.SendAsync(req);
+            try
+            {
+                rm.EnsureSuccessStatusCode();
+                return true;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e.Message);
+                return false;
+            }
+        }
+
+        public class QueuedItem
+        {
+            public string url;
+            public string serializedBody;
+            public DateTime runAfter;
+
+            public QueuedItem(string url, string serializedBody, int streamDelay)
+            {
+                this.url = url;
+                this.serializedBody = serializedBody;
+                this.runAfter = (DateTime.Now).AddSeconds(streamDelay);
+            }
+
+            public QueuedItem(string url, object body, int streamDelay)
+            {
+                this.url = url;
+                this.serializedBody = JsonConvert.SerializeObject(body);
+                this.runAfter = (DateTime.Now).AddSeconds(streamDelay);
+                
+            }
+        }
+
+        public class MatchJoinedPayload
+        {
+            public List<LTDPlayer> players;
+            public int wave;
+            public string matchUUID;
+            public int leftKingHP;
+            public int rightKingHP;
+
+            public MatchJoinedPayload(List<LTDPlayer> players, int wave, string matchUUID, int leftKingHP, int rightKingHP)
+            {
+                this.players = players;
+                this.wave = wave;
+                this.matchUUID = matchUUID;
+                this.leftKingHP = leftKingHP;
+                this.rightKingHP = rightKingHP;
+            }
+        }
+
+        public class MythiumRecceived
+        {
+            public int mythium;
+            public int player;
+
+            public MythiumRecceived(int mythium, int player)
+            {
+                this.mythium = mythium;
+                this.player = player;
+            }
+        }
+
+        public class PostGameStatsPayload
+        {
+            public List<PostGameStatsPlayerBuilds> stats;
+            public int leftKingHP;
+            public int rightKingHP;
+            public int wave; // the wave it actually ended on.
+            public string matchUUID;
+            public PostGameStatsPayload(List<PostGameStatsPlayerBuilds> stats, int leftKingHP, int rightKingHP, int wave ,string matchUUID)
+            {
+                this.stats = stats;
+                this.leftKingHP = leftKingHP;
+                this.rightKingHP = rightKingHP;
+                this.wave = wave;
+                this.matchUUID = matchUUID;
+            }
+        }
+
+        public class PostGameStatsPlayerBuilds
+        {
+            public int wave;
+            public int fighterValue;
+            public int workers;
+            public int recommendedValue;
+            public List<string> unitsLeaked;
+            public int player;
+            public PostGameStatsPlayerBuilds(PostGamePlayerBuildFighterProperties p, int waveNumber, int player)
+            {
+                this.wave = waveNumber;
+                this.fighterValue = p.fightersValue;
+                this.workers = p.workers;
+                this.recommendedValue = p.recommendedValue;
+                this.unitsLeaked = p.unitsLeaked;
+                this.player = player;
             }
         }
 
@@ -272,34 +541,113 @@ namespace Logless
             public string? guildAvatar { get; set; }
             public string? guildAvatarStacks { get; set; }
 
-            public int? mythiumReceived { get; set; }
-
             [JsonIgnore]
             public bool found = true;
-
-            public List<Unit> units { get; set; } = new List<Unit>();
-            public List<Recceived> mercenaries { get; set; } = new List<Recceived>();
         }
 
         public class Recceived
         {
             public string image { get; set; }
-
-            public Recceived (string image)
+            public int player { get; set; }
+            
+            public int count { get;set; }
+            public Recceived (string image, int player, int count)
             {
                 this.image = image;
+                this.player = player;
+                this.count = count;
             }
         }
 
-        public class Payload
+        public class WaveStartedPayload
         {
-            public List<LTDPlayer> players;
             public int wave;
+            public string matchUUID;
+            public List<Unit> units;
+            public List<Recceived> recceived;
+            public List<MythiumRecceived> recceivedAmount;
+            public int leftKingWaveStartHP;
+            public int rightKingWaveStartHP;
 
-            public Payload(List<LTDPlayer> players, int wave)
+
+            public WaveStartedPayload(int wave, string matchUUID, List<Unit>units, List<Recceived>received, List<MythiumRecceived> recceivedAmount, int leftPercentage, int rightPercentage)
             {
-                this.players = players;
+                this.units = units;
+                this.recceived = received;
                 this.wave = wave;
+                this.matchUUID = matchUUID;
+                this.recceivedAmount = recceivedAmount;
+                this.leftKingWaveStartHP = leftPercentage;
+                this.rightKingWaveStartHP = rightPercentage;
+            }
+        }
+
+        public class WaveCompletedPayload
+        {
+            public string matchUUID; 
+            public int wave;
+            public int leftKingHP;
+            public int rightKingHP;
+            public List<Leaks> leaks;
+            public bool lastWave;
+
+            public WaveCompletedPayload(int wave, int leftKingHP, int rightKingHP, List<Leaks> leaks, bool lastWave, string matchUUID)
+            {
+                this.wave = wave;
+                this.leftKingHP = leftKingHP;
+                this.rightKingHP = rightKingHP;
+                this.leaks = leaks;
+                this.lastWave = lastWave;
+                this.matchUUID = matchUUID;
+            }
+        }
+
+        public class GameCompletedPayload
+        {
+            public string matchUUID;
+            public int wave;
+            public List<Leaks> leaks;
+            public bool lastWave;
+            public List<MastermindLegion> legionMastermind;
+
+            public GameCompletedPayload(int wave, List<Leaks> leaks, bool lastWave, string matchUUID, List<MastermindLegion> legionMastermind)
+            {
+                this.wave = wave;
+                this.leaks = leaks;
+                this.lastWave = lastWave;
+                this.matchUUID = matchUUID;
+                this.legionMastermind = legionMastermind;
+            }
+        }
+
+        public class MastermindLegion
+        {
+            public int player;
+            public string playstyle;
+            public string playstyleIcon;
+            public string spell;
+            public string spellIcon;
+            public int mvpScore;
+            public MastermindLegion(PostGameStatsRowProperties p)
+            {
+                this.player = p.number;
+                this.playstyle = p.playstyle;
+                this.playstyleIcon = p.playstyleIcon;
+                this.spell = p.spell;
+                this.spellIcon = p.spellIcon;
+                this.mvpScore = p.mvpScore;
+            }
+        }
+
+        public class Leaks
+        {
+            public int percentage;
+            public int player;
+
+            public Leaks(int percentage, int player)
+            {
+                this.percentage = percentage;
+                this.player = player;
             }
         }
 
@@ -311,13 +659,15 @@ namespace Logless
             public string name;
             [JsonProperty("name")]
             public string image;
+            public int player;
 
-            public Unit(int x, int y, string name, string image)
+            public Unit(int x, int y, string name, string image, int recceivingPlayer)
             {
                 this.x = x;
                 this.y = y;
                 this.name = name;
                 this.image = image;
+                this.player = recceivingPlayer;
             }
         }
 
