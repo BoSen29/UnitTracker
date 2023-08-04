@@ -188,7 +188,8 @@ namespace Logless
                         {
                             Console.WriteLine("Issues fetching the mercenaries recceived, skipping for now.");
                         }
-                        double treshold = (WaveInfo.GetWaveInfo(this.waveNumber).AmountSpawned * this.lTDPlayers.FindAll(l => l.player < 5).Count + total / 1.5);
+                        Console.WriteLine("Found total of " + total + " mercenaries this wave.");
+                        double treshold = (((WaveInfo.GetWaveInfo(this.waveNumber).AmountSpawned * this.lTDPlayers.FindAll(l => l.player < 5).Count) + total) * 0.7);
                         if (treshold < i)
                         {
                             maxUnitsSeen = i;
@@ -401,6 +402,7 @@ namespace Logless
                         catch (Exception ex)
                         {
                             Console.WriteLine("Issues parsing a leak... :seenoevil:");
+                            Console.WriteLine(ex.Message);
                         }
                         Console.WriteLine("Leak registered!");
                         Console.WriteLine(content);
@@ -543,6 +545,7 @@ namespace Logless
 
         public class LTDPlayer
         {
+            #nullable enable
             public int player { get; set; }
             public string? name { get; set; }
             public string? guild { get; set; }
