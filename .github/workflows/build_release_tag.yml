@@ -1,4 +1,4 @@
-name: Logless Release
+name: UnitTracker Release
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
       - v*
 
 env:
-  LIB_NAME: Logless
+  LIB_NAME: UnitTracker
 
 jobs:
   build-and-release:

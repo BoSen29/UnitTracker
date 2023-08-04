@@ -135,7 +135,6 @@ namespace Logless
                 mythium.Add(new MythiumRecceived(Snapshot.PlayerProperties[p].MythiumReceivedPerWave[this.waveNumber], p));
             }
 
-
             if (this.waveNumber > -1)
             {
                 int leftPercentage = 100;
@@ -177,7 +176,19 @@ namespace Logless
                 {
                     if (this._waveSet)
                     {
-                        double treshold = (WaveInfo.GetWaveInfo(this.waveNumber).AmountSpawned * this.lTDPlayers.FindAll(l => l.player < 5).Count / 1.7);
+                        int total = 0;
+                        try
+                        {
+                            total = Assets.States.Components.MercenaryIconHandler.GetMercenaryIconsReceived(1, this.waveNumber).Count;
+                            total += Assets.States.Components.MercenaryIconHandler.GetMercenaryIconsReceived(2, this.waveNumber).Count;
+                            total += Assets.States.Components.MercenaryIconHandler.GetMercenaryIconsReceived(3, this.waveNumber).Count;
+                            total += Assets.States.Components.MercenaryIconHandler.GetMercenaryIconsReceived(4, this.waveNumber).Count;
+                        }
+                        catch
+                        {
+                            Console.WriteLine("Issues fetching the mercenaries recceived, skipping for now.");
+                        }
+                        double treshold = (WaveInfo.GetWaveInfo(this.waveNumber).AmountSpawned * this.lTDPlayers.FindAll(l => l.player < 5).Count + total / 1.5);
                         if (treshold < i)
                         {
                             maxUnitsSeen = i;
@@ -192,6 +203,7 @@ namespace Logless
                         maxUnitsSeen = 0;
                         this._waveSet = false;
                         this._shouldPost = false;
+                        
                     }
                 };
 
@@ -240,7 +252,9 @@ namespace Logless
                         List<PostGameStatsPlayerBuilds> data = new List<PostGameStatsPlayerBuilds>();
                         Dictionary<int, int> indexToPlayer = new Dictionary<int, int>();
                         int n = 0;
-                        this.lTDPlayers.ForEach((p) =>
+
+                        // pray that the playernames is in order... ? 
+                        this.lTDPlayers.OrderBy(o => o.player).ToList().ForEach((p) =>
                         {
                             indexToPlayer.Add(n, p.player);
                             n++;
