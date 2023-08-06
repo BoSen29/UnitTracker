@@ -18,3 +18,6 @@ After first launching the game a configuration file will be created at `Legion T
 Note: the Overlay in Twitch needs to be configured to match the identity provided by BoSen. BoSen will provide this information along with the JWT upon inqueries.
 
 Note: current implementation might experience issues when two streamers are in the same game, without equal stream-delay. Fix in progress. 
+
+##Changelog
+1.1.3 - Fixed issues fetching Scoreboard-data during high-density mercenary spawning on west side.
