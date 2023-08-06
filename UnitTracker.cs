@@ -60,6 +60,7 @@ namespace Logless
         private string matchUUID = "";
         private Queue<QueuedItem> _queue = new Queue<QueuedItem>();
         private List<Leaks> leaks = new List<Leaks>();
+        private int retries = 0;
         public void Awake() {
             configUrl = Config.Bind("General", "UpdateURL", "https://ltd2.krettur.no/v2/update", "HTTPS endpoint to post on waveStarted event, default is the extension used by the Twitch Overlay.");
             configJwt = Config.Bind("General", "JWT", "", "JWT to authenticate your data, reach out to @bosen in discord to get your token for the Twitch Overlay.");
@@ -96,44 +97,53 @@ namespace Logless
             throw new NotImplementedException();
         }
 
-        private void fetchAndPostWaveStartedInfo()
+        private bool fetchAndPostWaveStartedInfo()
         {
             List<MythiumRecceived> mythium = new List<MythiumRecceived>();
-            foreach (ushort p in PlayerApi.GetPlayingPlayers())
+            try
             {
-                Console.WriteLine("Fetching for player " + p);
-                LTDPlayer player = this.lTDPlayers.Find(pl => pl.player == p);
-
-                Dictionary<IntVector2, Scoreboard.ScoreboardGridData> data = Scoreboard.GetGridData(p);
-
-                Console.WriteLine("Found " + data.Count + "Entries... adding them to the list");
-                foreach (IntVector2 key in data.Keys)
+                foreach (ushort p in PlayerApi.GetPlayingPlayers())
                 {
-                    int index = units.FindIndex(u => u.player == p &&  u.x == key.x && u.y == key.y);
-                    if (index == -1)
+                    Console.WriteLine("Fetching for player " + p);
+                    LTDPlayer player = this.lTDPlayers.Find(pl => pl.player == p);
+
+                    Dictionary<IntVector2, Scoreboard.ScoreboardGridData> data = Scoreboard.GetGridData(p);
+
+                    Console.WriteLine("Found " + data.Count + "Entries... adding them to the list");
+                    foreach (IntVector2 key in data.Keys)
                     {
-                        units.Add(new Unit(key.x, key.y, data[key].UnitType, data[key].Image, player.player));
+                        int index = units.FindIndex(u => u.player == p && u.x == key.x && u.y == key.y);
+                        if (index == -1)
+                        {
+                            units.Add(new Unit(key.x, key.y, data[key].UnitType, data[key].Image, player.player));
+                        }
                     }
+
+                    List<string> mercs = Assets.States.Components.MercenaryIconHandler.GetMercenaryIconsReceived(p, this.waveNumber);
+
+                    foreach (string merc in mercs)
+                    {
+                        int index = this.mercenaries.FindIndex(r => r.player == player.player && r.image == merc);
+
+                        if (index != -1)
+                        {
+                            this.mercenaries[index].count++;
+                        }
+                        else
+                        {
+                            this.mercenaries.Add(new Recceived(merc, player.player, 1));
+                        }
+                    }
+
+                    mythium.Add(new MythiumRecceived(Snapshot.PlayerProperties[p].MythiumReceivedPerWave[this.waveNumber], p));
                 }
-
-                List<string> mercs = Assets.States.Components.MercenaryIconHandler.GetMercenaryIconsReceived(p, this.waveNumber);
-
-                foreach (string merc in mercs)
-                {
-                    int index = this.mercenaries.FindIndex(r => r.player == player.player && r.image == merc);
-
-                    if (index != -1)
-                    {
-                        this.mercenaries[index].count++;
-                    }
-                    else
-                    {
-                        this.mercenaries.Add(new Recceived(merc, player.player, 1));
-                    }
-                }
-
-                mythium.Add(new MythiumRecceived(Snapshot.PlayerProperties[p].MythiumReceivedPerWave[this.waveNumber], p));
             }
+            catch
+            {
+                Console.WriteLine("Error fetching scoreboard, reattempting next update.");
+                return false;
+            }
+            
 
             if (this.waveNumber > -1)
             {
@@ -163,10 +173,13 @@ namespace Logless
                     configStreamDelay.Value
                 ));
             }
+            return true;
         }
 
         public void Update()
         {
+            //ClientApi.IsSpectator() // returns spectator ## do some logic omg
+
             if (!this._registered && this._configured && sp.Elapsed.TotalSeconds > 20) // guessing init time of the base class Assets.Features.Hud to prevent accidentally triggering the constructor prematurely;
             {
                 this._registered = true;
@@ -188,7 +201,6 @@ namespace Logless
                         {
                             Console.WriteLine("Issues fetching the mercenaries recceived, skipping for now.");
                         }
-                        Console.WriteLine("Found total of " + total + " mercenaries this wave.");
                         double treshold = (((WaveInfo.GetWaveInfo(this.waveNumber).AmountSpawned * this.lTDPlayers.FindAll(l => l.player < 5).Count) + total) * 0.7);
                         if (treshold < i)
                         {
@@ -200,10 +212,25 @@ namespace Logless
                     if (this._shouldPost && (maxUnitsSeen > i || (WaveInfo.GetWaveInfo(this.waveNumber).AmountSpawned * this.lTDPlayers.FindAll(l => l.player < 5).Count) <= i))
                     {
                         // indicates that more than 75% of the wave has spawned, and that the number of creeps is decreasing or that mercs equal or greater than the entire wave has spawned.
-                        fetchAndPostWaveStartedInfo();
-                        maxUnitsSeen = 0;
-                        this._waveSet = false;
-                        this._shouldPost = false;
+                        if (this.retries > 3)
+                        {
+                            maxUnitsSeen = 0;
+                            this._waveSet = true;
+                            this._shouldPost = true;
+                            this.retries = 0;
+                        }
+                        if (fetchAndPostWaveStartedInfo())
+                        {
+                            maxUnitsSeen = 0;
+                            this._waveSet = false;
+                            this._shouldPost = false;
+                            this.retries = 0;
+                        }
+                        else
+                        {
+                            this.retries++;
+                            // shit failed, reattempt next time it changes ? 
+                        }
                         
                     }
                 };
