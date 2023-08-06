@@ -97,7 +97,7 @@ namespace Logless
             throw new NotImplementedException();
         }
 
-        private bool fetchAndPostWaveStartedInfo()
+        private bool fetchAndPostWaveStartedInfo(bool force = false)
         {
             List<MythiumRecceived> mythium = new List<MythiumRecceived>();
             try
@@ -109,6 +109,12 @@ namespace Logless
 
                     Dictionary<IntVector2, Scoreboard.ScoreboardGridData> data = Scoreboard.GetGridData(p);
 
+                    
+
+                    if(data.Count < 1)
+                    {
+                        throw new Exception("Nope, no units for this bad boi");
+                    }
                     Console.WriteLine("Found " + data.Count + "Entries... adding them to the list");
                     foreach (IntVector2 key in data.Keys)
                     {
@@ -140,8 +146,16 @@ namespace Logless
             }
             catch
             {
-                Console.WriteLine("Error fetching scoreboard, reattempting next update.");
-                return false;
+                
+                if (!force)
+                {
+                    Console.WriteLine("Error fetching scoreboard, reattempting next update.");
+                    return false;
+                }
+                else
+                {
+                    Console.WriteLine("Error fetching data, but proceeding since the treshold is reached.");
+                }
             }
             
 
@@ -212,14 +226,15 @@ namespace Logless
                     if (this._shouldPost && (maxUnitsSeen > i || (WaveInfo.GetWaveInfo(this.waveNumber).AmountSpawned * this.lTDPlayers.FindAll(l => l.player < 5).Count) <= i))
                     {
                         // indicates that more than 75% of the wave has spawned, and that the number of creeps is decreasing or that mercs equal or greater than the entire wave has spawned.
-                        if (this.retries > 3)
+                        if (this.retries > 5)
                         {
+                            fetchAndPostWaveStartedInfo(true);
                             maxUnitsSeen = 0;
                             this._waveSet = true;
                             this._shouldPost = true;
                             this.retries = 0;
                         }
-                        if (fetchAndPostWaveStartedInfo())
+                        if (fetchAndPostWaveStartedInfo(false))
                         {
                             maxUnitsSeen = 0;
                             this._waveSet = false;
