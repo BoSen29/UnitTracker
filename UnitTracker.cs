@@ -199,8 +199,48 @@ namespace Logless
                 this._registered = true;
                 Console.WriteLine("Registering event handlers.");
 
+                HudApi.OnPostSetHudTheme += (string theme) =>
+                {
+                    if (theme == "day" && this._waveSet)
+                    {
+                        Task.Run(async () => {
+                            await Task.Delay(5000);
+                            //create gamestate
+                            //submit gamestate to server
+                            int retries = 0;
+                            bool posted = false;
+                            do
+                            {
+                                try
+                                {
+                                    posted = fetchAndPostWaveStartedInfo(false);
+                                    retries++;
+
+                                    if (!posted)
+                                    {
+                                        await Task.Delay(2000);
+                                    }
+                                }
+                                catch
+                                {
+                                    retries++;
+                                }
+                            }
+                            while (retries < 5 || !posted);
+
+                            if (!posted)
+                            {
+                                Console.WriteLine("Failed 4 times, but pushing the data even though it might be lacking some information.");
+                                fetchAndPostWaveStartedInfo(true);
+                            }
+                        });
+                        this._waveSet = false;
+                    }
+                };
+
                 HudApi.OnSetWestEnemiesRemaining += (int i) =>
                 {
+                    return;
                     if (this._waveSet)
                     {
                         int total = 0;
