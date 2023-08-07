@@ -103,6 +103,7 @@ namespace Logless
             List<MythiumRecceived> mythium = new List<MythiumRecceived>();
             try
             {
+                this.mercenaries.Clear();
                 foreach (ushort p in PlayerApi.GetPlayingPlayers())
                 {
                     Log("Fetching for player " + p);
@@ -132,7 +133,7 @@ namespace Logless
                     List<string> mercs = Assets.States.Components.MercenaryIconHandler.GetMercenaryIconsReceived(p, ingameWaveNumber);
 
                     //mercenaries need to be cleared between queries, else their count will increase indefinitely
-                    this.mercenaries.Clear();
+
 
                     foreach (string merc in mercs)
                     {
@@ -154,6 +155,7 @@ namespace Logless
             catch (Exception e)
             {
                 Log("wave query generated an exception: " + e.ToString());
+
                 return null;
             }
             
@@ -196,7 +198,7 @@ namespace Logless
             if (!this._registered && this._configured && sp.Elapsed.TotalSeconds > 20) // guessing init time of the base class Assets.Features.Hud to prevent accidentally triggering the constructor prematurely;
             {
                 this._registered = true;
-                Console.WriteLine("Registering event handlers.");
+                Log("Registering event handlers.");
 
                 bool waveStartSynced = false;
                 HudApi.OnPostSetHudTheme += theme => {
@@ -260,7 +262,7 @@ namespace Logless
                         var payload =
                         new QueuedItem(
                             this.configUrl.Value,
-                            new WaveCompletedPayload(this.actualWaveNumber - 1, leftPercentage, rightPercentage, this.leaks, false, this.matchUUID),
+                            new WaveCompletedPayload(this.actualWaveNumber, leftPercentage, rightPercentage, this.leaks, false, this.matchUUID),
                             this.configStreamDelay.Value
                         );
                         Log("enqueuing waveCompletedPayload: " + payload.serializedBody);
