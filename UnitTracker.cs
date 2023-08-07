@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
@@ -45,7 +45,8 @@ namespace Logless
         private readonly Harmony _harmony = new("UnitTracker");
         private Stopwatch sp = new Stopwatch();
         private bool _registered = false;
-        private int waveNumber = 0;
+        private int actualWaveNumber = 0;
+        private int ingameWaveNumber = 0;
         private List<LTDPlayer> lTDPlayers = new List<LTDPlayer>();
         private List<Unit> units = new List<Unit>();
         private List<Recceived> mercenaries = new List<Recceived>();
@@ -97,35 +98,41 @@ namespace Logless
             throw new NotImplementedException();
         }
 
-        private bool fetchAndPostWaveStartedInfo(bool force = false)
+        private QueuedItem fetchWaveStartedInfo()
         {
             List<MythiumRecceived> mythium = new List<MythiumRecceived>();
             try
             {
                 foreach (ushort p in PlayerApi.GetPlayingPlayers())
                 {
-                    Console.WriteLine("Fetching for player " + p);
+                    Log("Fetching for player " + p);
                     LTDPlayer player = this.lTDPlayers.Find(pl => pl.player == p);
 
                     Dictionary<IntVector2, Scoreboard.ScoreboardGridData> data = Scoreboard.GetGridData(p);
 
                     
+                    //commented out, if a player sold all fighters state should still be updated
+                    //if(data.Count < 1)
+                    //{
+                    //    throw new Exception("Nope, no units for this bad boi");
+                    //}
 
-                    if(data.Count < 1)
-                    {
-                        throw new Exception("Nope, no units for this bad boi");
-                    }
-                    Console.WriteLine("Found " + data.Count + "Entries... adding them to the list");
+                    Log("Found " + data.Count + "Entries... adding them to the list");
+
+
                     foreach (IntVector2 key in data.Keys)
                     {
-                        int index = units.FindIndex(u => u.player == p && u.x == key.x && u.y == key.y);
+                        int index = this.units.FindIndex(u => u.player == p && u.x == key.x && u.y == key.y);
                         if (index == -1)
                         {
-                            units.Add(new Unit(key.x, key.y, data[key].UnitType, data[key].Image, player.player));
+                            this.units.Add(new Unit(key.x, key.y, data[key].UnitType, data[key].Image, player.player));
                         }
                     }
 
-                    List<string> mercs = Assets.States.Components.MercenaryIconHandler.GetMercenaryIconsReceived(p, this.waveNumber);
+                    List<string> mercs = Assets.States.Components.MercenaryIconHandler.GetMercenaryIconsReceived(p, ingameWaveNumber);
+
+                    //mercenaries need to be cleared between queries, else their count will increase indefinitely
+                    this.mercenaries.Clear();
 
                     foreach (string merc in mercs)
                     {
@@ -141,26 +148,16 @@ namespace Logless
                         }
                     }
 
-                    mythium.Add(new MythiumRecceived(Snapshot.PlayerProperties[p].MythiumReceivedPerWave[this.waveNumber], p));
+                    mythium.Add(new MythiumRecceived(Snapshot.PlayerProperties[p].MythiumReceivedPerWave[this.ingameWaveNumber], p));
                 }
             }
-            catch
+            catch (Exception e)
             {
-                
-                if (!force)
-                {
-                    Console.WriteLine("Error fetching scoreboard, reattempting next update.");
-                    return false;
-                }
-                else
-                {
-                    Console.WriteLine("Error fetching data, but proceeding since the treshold is reached.");
-                }
+                Log("wave query generated an exception: " + e.ToString());
+                return null;
             }
             
 
-            if (this.waveNumber > -1)
-            {
                 int leftPercentage = 100;
                 int rightPercentage = 100;
                 try
@@ -180,16 +177,18 @@ namespace Logless
                 {
                     Console.WriteLine("King unavailable, asuming 100%");
                 }
-                this._queue.Enqueue(
+            Log("wave query was successfull.");
+            return
                 new QueuedItem(
                     this.configUrl.Value,
-                    new WaveStartedPayload(this.waveNumber, this.matchUUID, this.units, this.mercenaries, mythium, leftPercentage, rightPercentage),
+                    new WaveStartedPayload(this.actualWaveNumber, this.matchUUID, this.units, this.mercenaries, mythium, leftPercentage, rightPercentage),
                     configStreamDelay.Value
-                ));
-            }
-            return true;
+                );
+            
         }
-
+        void Log(string msg) {
+            Console.WriteLine("UNITTRACKER " + System.DateTime.UtcNow.ToString("yyyy-MM-dd--HH-mm-ss-ffff") + " " + msg);
+        }
         public void Update()
         {
             //ClientApi.IsSpectator() // returns spectator ## do some logic omg
@@ -199,100 +198,41 @@ namespace Logless
                 this._registered = true;
                 Console.WriteLine("Registering event handlers.");
 
-                HudApi.OnPostSetHudTheme += (string theme) =>
-                {
-                    if (theme == "day" && this._waveSet)
-                    {
+                bool waveStartSynced = false;
+                HudApi.OnPostSetHudTheme += theme => {
+                    Log("OnPostSetHudTheme: " + theme);
+                    if (theme == "day") {
+                        if (waveStartSynced) return;
+                        waveStartSynced = true;
+
+                        actualWaveNumber += 1;
                         Task.Run(async () => {
-                            await Task.Delay(5000);
-                            //create gamestate
-                            //submit gamestate to server
-                            int retries = 0;
-                            bool posted = false;
-                            do
-                            {
-                                try
-                                {
-                                    posted = fetchAndPostWaveStartedInfo(false);
-                                    retries++;
+                            await Task.Delay(1000);
+                            var prevState = fetchWaveStartedInfo();
 
-                                    if (!posted)
-                                    {
-                                        await Task.Delay(2000);
-                                    }
-                                }
-                                catch
-                                {
-                                    retries++;
-                                }
+                        check:
+                            await Task.Delay(1000);
+                            var newState = fetchWaveStartedInfo();
+                            if (prevState == null || prevState?.serializedBody != newState?.serializedBody) {
+                                Log("wave state has changed OR wave query was unsuccessful.");
+                                Log("old state: " +prevState?.serializedBody);
+                                Log("new state: " +newState?.serializedBody);
+                                prevState = newState;
+                                goto check;
                             }
-                            while (retries < 5 || !posted);
-
-                            if (!posted)
-                            {
-                                Console.WriteLine("Failed 4 times, but pushing the data even though it might be lacking some information.");
-                                fetchAndPostWaveStartedInfo(true);
-                            }
+                            Log("submitting wave state to server: " + newState?.serializedBody);
+                            this._queue.Enqueue(newState);
                         });
-                        this._waveSet = false;
+                    }
+                    else {
+                        waveStartSynced = false;
                     }
                 };
 
-                HudApi.OnSetWestEnemiesRemaining += (int i) =>
-                {
-                    return;
-                    if (this._waveSet)
-                    {
-                        int total = 0;
-                        try
-                        {
-                            total = Assets.States.Components.MercenaryIconHandler.GetMercenaryIconsReceived(1, this.waveNumber).Count;
-                            total += Assets.States.Components.MercenaryIconHandler.GetMercenaryIconsReceived(2, this.waveNumber).Count;
-                            total += Assets.States.Components.MercenaryIconHandler.GetMercenaryIconsReceived(3, this.waveNumber).Count;
-                            total += Assets.States.Components.MercenaryIconHandler.GetMercenaryIconsReceived(4, this.waveNumber).Count;
-                        }
-                        catch
-                        {
-                            Console.WriteLine("Issues fetching the mercenaries recceived, skipping for now.");
-                        }
-                        double treshold = (((WaveInfo.GetWaveInfo(this.waveNumber).AmountSpawned * this.lTDPlayers.FindAll(l => l.player < 5).Count) + total) * 0.7);
-                        if (treshold < i)
-                        {
-                            maxUnitsSeen = i;
-                            this._waveSet = true;
-                            this._shouldPost = true;
-                        }
-                    }
-                    if (this._shouldPost && (maxUnitsSeen > i || (WaveInfo.GetWaveInfo(this.waveNumber).AmountSpawned * this.lTDPlayers.FindAll(l => l.player < 5).Count) <= i))
-                    {
-                        // indicates that more than 75% of the wave has spawned, and that the number of creeps is decreasing or that mercs equal or greater than the entire wave has spawned.
-                        if (this.retries > 5)
-                        {
-                            fetchAndPostWaveStartedInfo(true);
-                            maxUnitsSeen = 0;
-                            this._waveSet = true;
-                            this._shouldPost = true;
-                            this.retries = 0;
-                        }
-                        if (fetchAndPostWaveStartedInfo(false))
-                        {
-                            maxUnitsSeen = 0;
-                            this._waveSet = false;
-                            this._shouldPost = false;
-                            this.retries = 0;
-                        }
-                        else
-                        {
-                            this.retries++;
-                            // shit failed, reattempt next time it changes ? 
-                        }
-                        
-                    }
-                };
 
                 HudApi.OnSetWaveNumber += (i) =>
                 {
-                    this.waveNumber = i;
+                    this.ingameWaveNumber = i;
                     this._waveSet = true;
                     this.units.Clear();
                     this.mercenaries.Clear();
@@ -315,14 +255,16 @@ namespace Logless
 
                     
 
-                    if (this.waveNumber > 1)
+                    if (this.actualWaveNumber > 1)
                     {
-                        this._queue.Enqueue(
+                        var payload =
                         new QueuedItem(
                             this.configUrl.Value,
-                            new WaveCompletedPayload(this.waveNumber - 1, leftPercentage, rightPercentage, this.leaks, false, this.matchUUID),
+                            new WaveCompletedPayload(this.actualWaveNumber - 1, leftPercentage, rightPercentage, this.leaks, false, this.matchUUID),
                             this.configStreamDelay.Value
-                        ));
+                        );
+                        Log("enqueuing waveCompletedPayload: " + payload.serializedBody);
+                        this._queue.Enqueue(payload);
                     }
 
                     this.leaks.Clear();
@@ -342,31 +284,28 @@ namespace Logless
                             indexToPlayer.Add(n, p.player);
                             n++;
                         });
+                        Log("e.Builds.Count: " + e.builds.Count);
 
-                        e.builds.ForEach(b =>
-                        {
-                            int i = 0;
-
-                            b.playerBuilds.ForEach(c =>
-                            {
-                                try
-                                {
-                                    data.Add(new PostGameStatsPlayerBuilds(c, b.number, indexToPlayer[i]));
+                        //reformatted to send actual wave number in payload, rather than ingame wave number
+                        for (int i_builds = 0; i_builds < e.builds.Count; i_builds++) {
+                            for(int i_playerBuilds = 0; i_playerBuilds < e.builds[i_builds].playerBuilds.Count; i_playerBuilds++) { 
+                                try {
+                                    data.Add(new PostGameStatsPlayerBuilds(e.builds[i_builds].playerBuilds[i_playerBuilds], i_builds + 1, indexToPlayer[i_playerBuilds]));
                                 }
-                                catch (Exception ex)
-                                {
-                                    Console.WriteLine("Unable to add index for player " + i);
+                                catch (Exception ex) {
+                                    Console.WriteLine("Unable to add index for player " + i_playerBuilds);
                                     Console.WriteLine(ex.Message);
                                 }
-                                i++;
-                            });
-                        });
+                            }
+                        }
 
                         int left = (int)Math.Round(e.builds.Last().leftKingPercentHp * 100);
                         int right = (int)Math.Round(e.builds.Last().rightKingPercentHp * 100);
                         int last = e.builds.Last().number;
-                        Console.WriteLine("Queueing up a postmatch build summary");
-                        this._queue.Enqueue(new QueuedItem(configUrl.Value, new PostGameStatsPayload(data, left, right, last, this.matchUUID), configStreamDelay.Value));
+
+                        var payload = new QueuedItem(configUrl.Value, new PostGameStatsPayload(data, left, right, last, this.matchUUID), configStreamDelay.Value);
+                        Log("Queueing up a postmatch build summary: " + payload.serializedBody);
+                        this._queue.Enqueue(payload);
                     }
                     catch (Exception ex)
                     {
@@ -393,7 +332,9 @@ namespace Logless
 
                     if (e.gameId == this.matchUUID)
                     {
-                        this._queue.Enqueue(new QueuedItem(this.configUrl.Value, new GameCompletedPayload(this.waveNumber, this.leaks, true, this.matchUUID, lmlist), configStreamDelay.Value));
+                        var payload = new QueuedItem(this.configUrl.Value, new GameCompletedPayload(this.actualWaveNumber, this.leaks, true, this.matchUUID, lmlist), configStreamDelay.Value);
+                        Log("Enqueuing final payload: " + payload.serializedBody);
+                        this._queue.Enqueue(payload);
                     }
                     else
                     {
@@ -404,6 +345,8 @@ namespace Logless
                 HudApi.OnEnteredGame += (SimpleEvent)delegate
                 {
                     Console.WriteLine("Entered new game, fetching players.");
+
+                    this.actualWaveNumber = 0;
 
                     this.matchUUID = ClientApi.GetServerLogURL().Split('/').Last(); // should return gameid from ConfigApi.GameId which is internal.
 
@@ -446,7 +389,9 @@ namespace Logless
 
                     int leftPercentage = 100;
                     int rightPercentage = 100;
-                    this._queue.Enqueue(new QueuedItem(this.configUrl.Value, new MatchJoinedPayload(this.lTDPlayers, 0, this.matchUUID, leftPercentage, rightPercentage), this.configStreamDelay.Value));
+                    var payload = new QueuedItem(this.configUrl.Value, new MatchJoinedPayload(this.lTDPlayers, 0, this.matchUUID, leftPercentage, rightPercentage), this.configStreamDelay.Value);
+                    Log("Enqueuing new game payload: " + payload.serializedBody);
+                    this._queue.Enqueue(payload);
 
                     // this.postData(new Payload(this.lTDPlayers, this.waveNumber, this.matchUUID)); // intentional non-awaiting async task to prevent hanging up the core thread.
                     
