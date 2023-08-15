@@ -17,6 +17,9 @@ After first launching the game a configuration file will be created at `Legion T
 
 Note: the Overlay in Twitch needs to be configured to match the identity provided by BoSen. BoSen will provide this information along with the JWT upon inqueries.
 
+## Upgrading 
+
+Any non-breaking upgrades should just be a matter of copy and replace the current UnitTracker.dll with a new one. Any breaking changes requiring a different approach will be documented with the release.
 
 ## Changelog
 1.1.6 - Fixed fetching data during spectate sessions. 
