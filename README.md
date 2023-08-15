@@ -20,5 +20,7 @@ Note: the Overlay in Twitch needs to be configured to match the identity provide
 Note: current implementation might experience issues when two streamers are in the same game, without equal stream-delay. Fix in progress. 
 
 ## Changelog
+1.1.6 - Fixed fetching data during spectate sessions. 
+1.1.5 - Fixed the data fetching issues.
 1.1.4 - Another attempted fix at solving the issue of missing data from scoreboard. Now with forced exceptions @ 0.
 1.1.3 - Fixed issues fetching Scoreboard-data during high-density mercenary spawning on west side.
