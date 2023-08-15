@@ -13,11 +13,10 @@ Tracks the builds ingame, and posts the data to a specified url with the specifi
 ## Configuration
 
 DM @bosen29 on Discord for a juicy JWT to identify your requests, and install the overlay in your stream (currently invite only).
-After first launching the game a configuration file will be created at `Legion TD 2/BepInEx/config/UnitTracker.cfg`, add the JWT to the config path, and optionally the stream-delay for your stream.
+After first launching the game a configuration file will be created at `Legion TD 2/BepInEx/config/UnitTracker.cfg`, open the config-file for editing and paste the JWT after the JWT configuration option, and optionally the stream-delay for your stream.
 
 Note: the Overlay in Twitch needs to be configured to match the identity provided by BoSen. BoSen will provide this information along with the JWT upon inqueries.
 
-Note: current implementation might experience issues when two streamers are in the same game, without equal stream-delay. Fix in progress. 
 
 ## Changelog
 1.1.6 - Fixed fetching data during spectate sessions. 
