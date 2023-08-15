@@ -31,6 +31,7 @@ using BepInEx.Configuration;
 using aag.Natives.Lib.Properties;
 using Assets.Features.Dev;
 using System.Text.RegularExpressions;
+using UnityEngine;
 
 namespace Logless
 {
@@ -62,6 +63,7 @@ namespace Logless
         private Queue<QueuedItem> _queue = new Queue<QueuedItem>();
         private List<Leaks> leaks = new List<Leaks>();
         private int retries = 0;
+        private bool waveStartSynced = false;
         public void Awake() {
             configUrl = Config.Bind("General", "UpdateURL", "https://ltd2.krettur.no/v2/update", "HTTPS endpoint to post on waveStarted event, default is the extension used by the Twitch Overlay.");
             configJwt = Config.Bind("General", "JWT", "", "JWT to authenticate your data, reach out to @bosen in discord to get your token for the Twitch Overlay.");
@@ -160,25 +162,25 @@ namespace Logless
             }
             
 
-                int leftPercentage = 100;
-                int rightPercentage = 100;
-                try
-                {
-                    UnitProperties left = Snapshot.UnitProperties[HudApi.GetHudSourceUnit(HudSection.LeftKing)];
-                    UnitProperties right = Snapshot.UnitProperties[HudApi.GetHudSourceUnit(HudSection.RightKing)];
+            int leftPercentage = 100;
+            int rightPercentage = 100;
+            try
+            {
+                UnitProperties left = Snapshot.UnitProperties[HudApi.GetHudSourceUnit(HudSection.LeftKing)];
+                UnitProperties right = Snapshot.UnitProperties[HudApi.GetHudSourceUnit(HudSection.RightKing)];
 
-                    //leftPercentage = (int)Math.Round(left.Hp.PercentLife); // (int)Math.Round(left.Hp.CurrentLife / left.Hp.MaxLife * 100);
-                    //rightPercentage = (int)Math.Round(right.Hp.PercentLife); //Math.Round(right.Hp.CurrentLife / right.Hp.MaxLife * 100);
+                //leftPercentage = (int)Math.Round(left.Hp.PercentLife); // (int)Math.Round(left.Hp.CurrentLife / left.Hp.MaxLife * 100);
+                //rightPercentage = (int)Math.Round(right.Hp.PercentLife); //Math.Round(right.Hp.CurrentLife / right.Hp.MaxLife * 100);
 
-                    leftPercentage = (int)Math.Round(left.Hp.GetLastLife(Snapshot.RenderTime) / left.Hp.GetMaxLife(Snapshot.RenderTime) * 100);
-                    rightPercentage = (int)Math.Round(right.Hp.GetLastLife(Snapshot.RenderTime) / right.Hp.GetMaxLife(Snapshot.RenderTime) * 100);
-                    // CurrentLife / MaxLife;
+                leftPercentage = (int)Math.Round(left.Hp.GetLastLife(Snapshot.RenderTime) / left.Hp.GetMaxLife(Snapshot.RenderTime) * 100);
+                rightPercentage = (int)Math.Round(right.Hp.GetLastLife(Snapshot.RenderTime) / right.Hp.GetMaxLife(Snapshot.RenderTime) * 100);
+                // CurrentLife / MaxLife;
 
-                }
-                catch
-                {
-                    Console.WriteLine("King unavailable, asuming 100%");
-                }
+            }
+            catch
+            {
+                Console.WriteLine("King unavailable, asuming 100%");
+            }
             Log("wave query was successfull.");
             return
                 new QueuedItem(
@@ -200,34 +202,52 @@ namespace Logless
                 this._registered = true;
                 Log("Registering event handlers.");
 
-                bool waveStartSynced = false;
                 HudApi.OnPostSetHudTheme += theme => {
                     Log("OnPostSetHudTheme: " + theme);
                     if (theme == "day") {
-                        if (waveStartSynced) return;
-                        waveStartSynced = true;
+                        if (this.waveStartSynced && !ClientApi.IsSpectator()) return;
+                        this.waveStartSynced = true;
 
-                        actualWaveNumber += 1;
+                        this.actualWaveNumber += 1;
                         Task.Run(async () => {
                             await Task.Delay(1000);
                             var prevState = fetchWaveStartedInfo();
+                            var lastState = prevState;
+                            int retries = 0;
+                            bool done = false;
+                            while (!done && retries < 6)
+                            {
+                                await Task.Delay(1000);
+                                var newState = fetchWaveStartedInfo();
+                                if (prevState == null || prevState?.serializedBody != newState?.serializedBody)
+                                {
+                                    Log("wave state has changed OR wave query was unsuccessful.");
+                                    Log("old state: " + prevState?.serializedBody);
+                                    Log("new state: " + newState?.serializedBody);
+                                    prevState = newState;
+                                }
+                                else
+                                {
+                                    Log("submitting wave state to server: " + newState?.serializedBody);
+                                    this._queue.Enqueue(newState);
+                                    done = true;
+                                }
 
-                        check:
-                            await Task.Delay(1000);
-                            var newState = fetchWaveStartedInfo();
-                            if (prevState == null || prevState?.serializedBody != newState?.serializedBody) {
-                                Log("wave state has changed OR wave query was unsuccessful.");
-                                Log("old state: " +prevState?.serializedBody);
-                                Log("new state: " +newState?.serializedBody);
-                                prevState = newState;
-                                goto check;
+                                if (retries == 6)
+                                {
+                                    lastState = newState;
+                                }
                             }
-                            Log("submitting wave state to server: " + newState?.serializedBody);
-                            this._queue.Enqueue(newState);
+                            if (!done)
+                            {
+                                Log("Submitting an unfinished state " + lastState?.serializedBody);
+
+                                this._queue.Enqueue(lastState);
+                            }
                         });
                     }
                     else {
-                        waveStartSynced = false;
+                        this.waveStartSynced = false;
                     }
                 };
 
