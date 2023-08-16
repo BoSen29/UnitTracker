@@ -64,6 +64,7 @@ namespace Logless
         private List<Leaks> leaks = new List<Leaks>();
         private int retries = 0;
         private bool waveStartSynced = false;
+        private bool firstWaveSet = false;
         public void Awake() {
             configUrl = Config.Bind("General", "UpdateURL", "https://ltd2.krettur.no/v2/update", "HTTPS endpoint to post on waveStarted event, default is the extension used by the Twitch Overlay.");
             configJwt = Config.Bind("General", "JWT", "", "JWT to authenticate your data, reach out to @bosen in discord to get your token for the Twitch Overlay.");
@@ -208,7 +209,16 @@ namespace Logless
                         if (this.waveStartSynced && !ClientApi.IsSpectator()) return;
                         this.waveStartSynced = true;
 
-                        this.actualWaveNumber += 1;
+                        if (!this.firstWaveSet)
+                        {
+                            this.actualWaveNumber = WaveInfo.CurrentWaveNumber;
+                            this.firstWaveSet = true;
+                        }
+                        else
+                        {
+                            this.actualWaveNumber += 1;
+                        }
+                        
                         Task.Run(async () => {
                             await Task.Delay(1000);
                             var prevState = fetchWaveStartedInfo();
@@ -275,18 +285,24 @@ namespace Logless
                         Console.WriteLine("King unavailable, asuming 100%");
                     }
 
-                    
-
-                    if (this.actualWaveNumber > 1)
+                    if (!this.firstWaveSet)
                     {
-                        var payload =
-                        new QueuedItem(
-                            this.configUrl.Value,
-                            new WaveCompletedPayload(this.actualWaveNumber, leftPercentage, rightPercentage, this.leaks, false, this.matchUUID),
-                            this.configStreamDelay.Value
-                        );
-                        Log("enqueuing waveCompletedPayload: " + payload.serializedBody);
-                        this._queue.Enqueue(payload);
+                        this.actualWaveNumber = i - 1;
+                        this.firstWaveSet = true;
+                    }
+                    else
+                    {
+                        if (this.actualWaveNumber > 1)
+                        {
+                            var payload =
+                            new QueuedItem(
+                                this.configUrl.Value,
+                                new WaveCompletedPayload(this.actualWaveNumber, leftPercentage, rightPercentage, this.leaks, false, this.matchUUID),
+                                this.configStreamDelay.Value
+                            );
+                            Log("enqueuing waveCompletedPayload: " + payload.serializedBody);
+                            this._queue.Enqueue(payload);
+                        }
                     }
 
                     this.leaks.Clear();
@@ -369,6 +385,7 @@ namespace Logless
                     Console.WriteLine("Entered new game, fetching players.");
 
                     this.actualWaveNumber = 0;
+                    this.firstWaveSet = false;
 
                     this.matchUUID = ClientApi.GetServerLogURL().Split('/').Last(); // should return gameid from ConfigApi.GameId which is internal.
 
