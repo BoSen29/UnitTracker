@@ -23,7 +23,7 @@ Any non-breaking upgrades should just be a matter of copy and replace the curren
 
 ## Changelog
 #### 1.1.17 
-Fixed issues with wavenumbers when specating a game in progress.
+Fixed issues with wavenumbers when specating a game in progress. Credits to Nyctea for help in testing this one.
 #### 1.1.6
 Fixed fetching data during spectate sessions. 
 #### 1.1.5 
