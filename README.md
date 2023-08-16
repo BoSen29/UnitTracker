@@ -22,6 +22,7 @@ Note: the Overlay in Twitch needs to be configured to match the identity provide
 Any non-breaking upgrades should just be a matter of copy and replace the current UnitTracker.dll with a new one. Any breaking changes requiring a different approach will be documented with the release.
 
 ## Changelog
+1.1.17 - Fixed issues with wavenumbers when specating a game in progress.
 1.1.6 - Fixed fetching data during spectate sessions. 
 1.1.5 - Fixed the data fetching issues.
 1.1.4 - Another attempted fix at solving the issue of missing data from scoreboard. Now with forced exceptions @ 0.
