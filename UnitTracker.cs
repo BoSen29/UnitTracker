@@ -96,11 +96,6 @@ namespace Logless
             sp.Start();
         }
 
-        private void ConfigStreamDelay_SettingChanged(object sender, EventArgs e)
-        {
-            throw new NotImplementedException();
-        }
-
         private QueuedItem fetchWaveStartedInfo()
         {
             List<MythiumRecceived> mythium = new List<MythiumRecceived>();
@@ -209,16 +204,28 @@ namespace Logless
                         if (this.waveStartSynced && !ClientApi.IsSpectator()) return;
                         this.waveStartSynced = true;
 
-                        if (!this.firstWaveSet)
+                        if (this.ingameWaveNumber < 21)
                         {
-                            this.actualWaveNumber = WaveInfo.CurrentWaveNumber;
-                            this.firstWaveSet = true;
+                            this.actualWaveNumber = this.ingameWaveNumber;
                         }
                         else
                         {
-                            this.actualWaveNumber += 1;
+                            if (!this.firstWaveSet)
+                            {
+                                this.actualWaveNumber = WaveInfo.CurrentWaveNumber;
+                                this.firstWaveSet = true;
+                            }
+                            else
+                            {
+                                this.actualWaveNumber += 1;
+                            }
+
+                            if (this.actualWaveNumber <= 0)
+                            {
+                                this.actualWaveNumber = 1;
+                            }
                         }
-                        
+
                         Task.Run(async () => {
                             await Task.Delay(1000);
                             var prevState = fetchWaveStartedInfo();
@@ -287,7 +294,7 @@ namespace Logless
 
                     if (!this.firstWaveSet)
                     {
-                        this.actualWaveNumber = i - 1;
+                        this.actualWaveNumber = i;
                         this.firstWaveSet = true;
                     }
                     else
