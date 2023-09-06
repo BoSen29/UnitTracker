@@ -294,7 +294,7 @@ namespace Logless
 
                     if (!this.firstWaveSet)
                     {
-                        this.actualWaveNumber = i;
+                        this.actualWaveNumber = i - 1;
                         this.firstWaveSet = true;
                     }
                     else
