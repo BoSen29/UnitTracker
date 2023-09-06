@@ -3,3 +3,5 @@ bin/*
 obj/*
 libs/*.dll
 *.user
+resources/*
+bfg.jar

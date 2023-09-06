@@ -294,7 +294,11 @@ namespace Logless
 
                     if (!this.firstWaveSet)
                     {
+<<<<<<< HEAD
                         this.actualWaveNumber = i - 1;
+=======
+                        this.actualWaveNumber = i;
+>>>>>>> df29e281cdc8971e74604055bcbad34cf68be3e6
                         this.firstWaveSet = true;
                     }
                     else
