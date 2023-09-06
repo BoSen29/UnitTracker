@@ -95,8 +95,8 @@ namespace Logless
             Logger.LogInfo($"Plugin {"UnitTracker"} is loaded!");
             sp.Start();
         }
-
-        private QueuedItem fetchWaveStartedInfo()
+#nullable enable
+        private QueuedItem? fetchWaveStartedInfo(List<PostGameStatsPlayerBuilds>? pgs = null)
         {
             List<MythiumRecceived> mythium = new List<MythiumRecceived>();
             try
@@ -178,14 +178,21 @@ namespace Logless
                 Console.WriteLine("King unavailable, asuming 100%");
             }
             Log("wave query was successfull.");
+            WaveStartedPayload wsp = new WaveStartedPayload(this.actualWaveNumber, this.matchUUID, this.units, this.mercenaries, mythium, leftPercentage, rightPercentage);
+            if (pgs != null)
+            {
+                wsp = wsp.AddPostGameStatsPlayerbuilds(pgs);
+            }
             return
                 new QueuedItem(
                     this.configUrl.Value,
-                    new WaveStartedPayload(this.actualWaveNumber, this.matchUUID, this.units, this.mercenaries, mythium, leftPercentage, rightPercentage),
+                    wsp,
                     configStreamDelay.Value
                 );
             
         }
+
+#nullable disable
         void Log(string msg) {
             Console.WriteLine("UNITTRACKER " + System.DateTime.UtcNow.ToString("yyyy-MM-dd--HH-mm-ss-ffff") + " " + msg);
         }
@@ -225,17 +232,33 @@ namespace Logless
                                 this.actualWaveNumber = 1;
                             }
                         }
+#nullable enable
+                        List<PostGameStatsPlayerBuilds>? pgs = null; 
+                        
+                        if (ClientApi.IsSpectator())
+                        {
+                            if (pgs == null)
+                            {
+                                pgs = new List<PostGameStatsPlayerBuilds>();
+                            }
+                            this.lTDPlayers.ForEach(p =>
+                            {
+                                PlayerProperties pp = Snapshot.PlayerProperties[p.player];
+                                pgs.Add(new PostGameStatsPlayerBuilds(this.actualWaveNumber, pp.GetTowerValue(), (int)pp.GetWorkerCount(), pp.GetRecommendedValue(this.ingameWaveNumber), p.player));
+                            });
+                        }
+#nullable disable
 
                         Task.Run(async () => {
                             await Task.Delay(1000);
-                            var prevState = fetchWaveStartedInfo();
+                            var prevState = fetchWaveStartedInfo(pgs);
                             var lastState = prevState;
                             int retries = 0;
                             bool done = false;
                             while (!done && retries < 6)
                             {
                                 await Task.Delay(1000);
-                                var newState = fetchWaveStartedInfo();
+                                var newState = fetchWaveStartedInfo(pgs);
                                 if (prevState == null || prevState?.serializedBody != newState?.serializedBody)
                                 {
                                     Log("wave state has changed OR wave query was unsuccessful.");
@@ -246,6 +269,7 @@ namespace Logless
                                 else
                                 {
                                     Log("submitting wave state to server: " + newState?.serializedBody);
+                                    if (pgs.Count > 0)
                                     this._queue.Enqueue(newState);
                                     done = true;
                                 }
@@ -258,7 +282,6 @@ namespace Logless
                             if (!done)
                             {
                                 Log("Submitting an unfinished state " + lastState?.serializedBody);
-
                                 this._queue.Enqueue(lastState);
                             }
                         });
@@ -267,7 +290,6 @@ namespace Logless
                         this.waveStartSynced = false;
                     }
                 };
-
 
                 HudApi.OnSetWaveNumber += (i) =>
                 {
@@ -294,15 +316,12 @@ namespace Logless
 
                     if (!this.firstWaveSet)
                     {
-<<<<<<< HEAD
-                        this.actualWaveNumber = i - 1;
-=======
                         this.actualWaveNumber = i;
->>>>>>> df29e281cdc8971e74604055bcbad34cf68be3e6
                         this.firstWaveSet = true;
                     }
                     else
                     {
+                        
                         if (this.actualWaveNumber > 1)
                         {
                             var payload =
@@ -550,7 +569,6 @@ namespace Logless
                 this.url = url;
                 this.serializedBody = JsonConvert.SerializeObject(body);
                 this.runAfter = (DateTime.Now).AddSeconds(streamDelay);
-                
             }
         }
 
@@ -618,6 +636,15 @@ namespace Logless
                 this.unitsLeaked = p.unitsLeaked;
                 this.player = player;
             }
+
+            public PostGameStatsPlayerBuilds(int wave, int figherValue, int workers, int recommendedValue, int player)
+            {
+                this.wave = wave;
+                this.fighterValue = figherValue;
+                this.workers = workers;
+                this.recommendedValue = recommendedValue;
+                this.player = player;
+            }
         }
 
         public class LTDPlayer
@@ -662,6 +689,7 @@ namespace Logless
             public List<MythiumRecceived> recceivedAmount;
             public int leftKingWaveStartHP;
             public int rightKingWaveStartHP;
+            public List<PostGameStatsPlayerBuilds>? stats;
 
 
             public WaveStartedPayload(int wave, string matchUUID, List<Unit>units, List<Recceived>received, List<MythiumRecceived> recceivedAmount, int leftPercentage, int rightPercentage)
@@ -673,6 +701,12 @@ namespace Logless
                 this.recceivedAmount = recceivedAmount;
                 this.leftKingWaveStartHP = leftPercentage;
                 this.rightKingWaveStartHP = rightPercentage;
+            }
+
+            public WaveStartedPayload AddPostGameStatsPlayerbuilds(List<PostGameStatsPlayerBuilds> pgs)
+            {
+                this.stats = pgs;
+                return this;
             }
         }
 
