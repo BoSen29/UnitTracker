@@ -22,6 +22,9 @@ Note: the Overlay in Twitch needs to be configured to match the identity provide
 Any non-breaking upgrades should just be a matter of copy and replace the current UnitTracker.dll with a new one. Any breaking changes requiring a different approach will be documented with the release.
 
 ## Changelog
+
+#### 1.2.0
+Added spectate-only fetching of workers, value and reccomended value during the game.
 #### 1.1.18
 Hopefully last time i fix the wavenumbers whilst spectaging 🤞 Thanks to Pennywise for reporting this issue.
 #### 1.1.17 
