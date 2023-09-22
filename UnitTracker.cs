@@ -32,6 +32,8 @@ using aag.Natives.Lib.Properties;
 using Assets.Features.Dev;
 using System.Text.RegularExpressions;
 using UnityEngine;
+using aag.GameData.Reader;
+
 
 namespace Logless
 {
@@ -65,6 +67,9 @@ namespace Logless
         private int retries = 0;
         private bool waveStartSynced = false;
         private bool firstWaveSet = false;
+        private bool sentMastermind = false;
+        private bool sentSpells = false;
+
         public void Awake() {
             configUrl = Config.Bind("General", "UpdateURL", "https://ltd2.krettur.no/v2/update", "HTTPS endpoint to post on waveStarted event, default is the extension used by the Twitch Overlay.");
             configJwt = Config.Bind("General", "JWT", "", "JWT to authenticate your data, reach out to @bosen in discord to get your token for the Twitch Overlay.");
@@ -96,7 +101,7 @@ namespace Logless
             sp.Start();
         }
 #nullable enable
-        private QueuedItem? fetchWaveStartedInfo(List<PostGameStatsPlayerBuilds>? pgs = null)
+        private QueuedItem? fetchWaveStartedInfo(List<PostGameStatsPlayerBuilds>? pgs = null, List<MastermindLegion>? legionMastermind = null)
         {
             List<MythiumRecceived> mythium = new List<MythiumRecceived>();
             try
@@ -183,6 +188,10 @@ namespace Logless
             {
                 wsp = wsp.AddPostGameStatsPlayerbuilds(pgs);
             }
+            if (legionMastermind != null)
+            {
+                wsp = wsp.AddLegionMastermind(legionMastermind);
+            }
             return
                 new QueuedItem(
                     this.configUrl.Value,
@@ -235,6 +244,8 @@ namespace Logless
 #nullable enable
                         List<PostGameStatsPlayerBuilds>? pgs = null; 
                         
+                        List<MastermindLegion>? legionMastermind = null;
+
                         if (ClientApi.IsSpectator())
                         {
                             if (pgs == null)
@@ -244,21 +255,60 @@ namespace Logless
                             this.lTDPlayers.ForEach(p =>
                             {
                                 PlayerProperties pp = Snapshot.PlayerProperties[p.player];
-                                pgs.Add(new PostGameStatsPlayerBuilds(this.actualWaveNumber, pp.GetTowerValue(), (int)pp.GetWorkerCount(), pp.GetRecommendedValue(this.ingameWaveNumber), p.player));
+                                List<string> rolls = (from roll in pp.Rolls.Get()
+                                                      select MapApi.Get("units", roll, "iconpath").Value).ToList();
+                                pgs.Add(new PostGameStatsPlayerBuilds(this.actualWaveNumber, pp.GetTowerValue(), (int)pp.GetWorkerCount(), pp.GetRecommendedValue(this.ingameWaveNumber), p.player, rolls));
                             });
+
+                            // send the masterminds on the first available wave
+                            if (!this.sentMastermind)
+                            {
+                                legionMastermind = new List<MastermindLegion>();
+
+                                this.lTDPlayers.ForEach(p =>
+                                {
+                                    PlayerProperties pp = Snapshot.PlayerProperties[p.player];
+                                    legionMastermind.Add(new MastermindLegion(p.player).addPlaystyle("unknown", pp.Image));
+                                });
+
+                                this.sentMastermind = true;
+                            }
+
+
+                            // send kingspells if its wave 11 or later
+                            if (!this.sentSpells && this.actualWaveNumber >= 11)
+                            {
+                                if (legionMastermind == null)
+                                {
+                                    legionMastermind = new List<MastermindLegion>();
+                                }
+                                this.lTDPlayers.ForEach(p =>
+                                {
+                                    int i = legionMastermind.FindIndex(l => l.player == p.player);
+                                    MastermindLegion t = i != -1 ? legionMastermind[i] : new MastermindLegion(p.player);
+                                    PlayerProperties pp = Snapshot.PlayerProperties[p.player];
+                                    t.addSpell(pp.PowerupSelected,MapApi.Get("powerups", pp.PowerupSelected, "iconpath"));
+
+                                    if (i == -1)
+                                    {
+                                        legionMastermind.Add(t);
+                                    }
+                                });
+                                this.sentSpells = true;
+                            }
                         }
 #nullable disable
 
                         Task.Run(async () => {
                             await Task.Delay(1000);
-                            var prevState = fetchWaveStartedInfo(pgs);
+                            var prevState = fetchWaveStartedInfo(pgs, legionMastermind);
                             var lastState = prevState;
                             int retries = 0;
                             bool done = false;
                             while (!done && retries < 6)
                             {
                                 await Task.Delay(1000);
-                                var newState = fetchWaveStartedInfo(pgs);
+                                var newState = fetchWaveStartedInfo(pgs, legionMastermind);
                                 if (prevState == null || prevState?.serializedBody != newState?.serializedBody)
                                 {
                                     Log("wave state has changed OR wave query was unsuccessful.");
@@ -269,7 +319,6 @@ namespace Logless
                                 else
                                 {
                                     Log("submitting wave state to server: " + newState?.serializedBody);
-                                    if (pgs.Count > 0)
                                     this._queue.Enqueue(newState);
                                     done = true;
                                 }
@@ -306,8 +355,6 @@ namespace Logless
 
                         leftPercentage = (int)Math.Round(left.Hp.GetLastLife(Snapshot.RenderTime) / left.Hp.GetMaxLife(Snapshot.RenderTime) * 100);
                         rightPercentage = (int)Math.Round(right.Hp.GetLastLife(Snapshot.RenderTime) / right.Hp.GetMaxLife(Snapshot.RenderTime) * 100);
-                        //leftPercentage = (int)Math.Round(left.Hp.CurrentLife / left.Hp.MaxLife * 100);
-                        //rightPercentage = (int)Math.Round(right.Hp.CurrentLife / right.Hp.MaxLife * 100);
                     }
                     catch
                     {
@@ -413,6 +460,8 @@ namespace Logless
                 HudApi.OnEnteredGame += (SimpleEvent)delegate
                 {
                     Console.WriteLine("Entered new game, fetching players.");
+                    this.sentMastermind = false;
+                    this.sentSpells = false;
 
                     this.actualWaveNumber = 0;
                     this.firstWaveSet = false;
@@ -458,12 +507,18 @@ namespace Logless
 
                     int leftPercentage = 100;
                     int rightPercentage = 100;
-                    var payload = new QueuedItem(this.configUrl.Value, new MatchJoinedPayload(this.lTDPlayers, 0, this.matchUUID, leftPercentage, rightPercentage), this.configStreamDelay.Value);
+
+                    List<string> source = Snapshot.PlayerProperties[ClientApi.GetLocalPlayer()].PowerupChoices.Get().ToList();
+
+                    List<string> powerupChoices = source.Select((string powerup) => MapApi.Get("powerups", powerup, "iconpath").Value).ToList();
+
+                    var payload = new QueuedItem(this.configUrl.Value, new MatchJoinedPayload(this.lTDPlayers, 0, this.matchUUID, leftPercentage, rightPercentage, powerupChoices), this.configStreamDelay.Value);
                     Log("Enqueuing new game payload: " + payload.serializedBody);
                     this._queue.Enqueue(payload);
 
+
                     // this.postData(new Payload(this.lTDPlayers, this.waveNumber, this.matchUUID)); // intentional non-awaiting async task to prevent hanging up the core thread.
-                    
+
                 };
 
                 HudApi.OnRefreshSticker += (props) => {
@@ -579,14 +634,16 @@ namespace Logless
             public string matchUUID;
             public int leftKingHP;
             public int rightKingHP;
+            public List<string> powerupChoices;
 
-            public MatchJoinedPayload(List<LTDPlayer> players, int wave, string matchUUID, int leftKingHP, int rightKingHP)
+            public MatchJoinedPayload(List<LTDPlayer> players, int wave, string matchUUID, int leftKingHP, int rightKingHP, List<string> powerupChoices)
             {
                 this.players = players;
                 this.wave = wave;
                 this.matchUUID = matchUUID;
                 this.leftKingHP = leftKingHP;
                 this.rightKingHP = rightKingHP;
+                this.powerupChoices = powerupChoices;
             }
         }
 
@@ -609,6 +666,7 @@ namespace Logless
             public int rightKingHP;
             public int wave; // the wave it actually ended on.
             public string matchUUID;
+
             public PostGameStatsPayload(List<PostGameStatsPlayerBuilds> stats, int leftKingHP, int rightKingHP, int wave ,string matchUUID)
             {
                 this.stats = stats;
@@ -627,6 +685,7 @@ namespace Logless
             public int recommendedValue;
             public List<string> unitsLeaked;
             public int player;
+            public List<string> rolls;
             public PostGameStatsPlayerBuilds(PostGamePlayerBuildFighterProperties p, int waveNumber, int player)
             {
                 this.wave = waveNumber;
@@ -635,15 +694,17 @@ namespace Logless
                 this.recommendedValue = p.recommendedValue;
                 this.unitsLeaked = p.unitsLeaked;
                 this.player = player;
+                this.rolls = p.rolls;
             }
 
-            public PostGameStatsPlayerBuilds(int wave, int figherValue, int workers, int recommendedValue, int player)
+            public PostGameStatsPlayerBuilds(int wave, int figherValue, int workers, int recommendedValue, int player, List<string> rolls)
             {
                 this.wave = wave;
                 this.fighterValue = figherValue;
                 this.workers = workers;
                 this.recommendedValue = recommendedValue;
                 this.player = player;
+                this.rolls = rolls;
             }
         }
 
@@ -689,8 +750,10 @@ namespace Logless
             public List<MythiumRecceived> recceivedAmount;
             public int leftKingWaveStartHP;
             public int rightKingWaveStartHP;
+            [JsonProperty(NullValueHandling=NullValueHandling.Ignore)]
             public List<PostGameStatsPlayerBuilds>? stats;
-
+            [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+            public List<MastermindLegion>? legionMastermind;
 
             public WaveStartedPayload(int wave, string matchUUID, List<Unit>units, List<Recceived>received, List<MythiumRecceived> recceivedAmount, int leftPercentage, int rightPercentage)
             {
@@ -706,6 +769,12 @@ namespace Logless
             public WaveStartedPayload AddPostGameStatsPlayerbuilds(List<PostGameStatsPlayerBuilds> pgs)
             {
                 this.stats = pgs;
+                return this;
+            }
+
+            public WaveStartedPayload AddLegionMastermind(List<MastermindLegion>legionMastermind)
+            {
+                this.legionMastermind = legionMastermind;
                 return this;
             }
         }
@@ -751,11 +820,16 @@ namespace Logless
         public class MastermindLegion
         {
             public int player;
-            public string playstyle;
-            public string playstyleIcon;
-            public string spell;
-            public string spellIcon;
-            public int mvpScore;
+            [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+            public string? playstyle;
+            [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+            public string? playstyleIcon;
+            [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+            public string? spell;
+            [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+            public string? spellIcon;
+            [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+            public int? mvpScore;
             public MastermindLegion(PostGameStatsRowProperties p)
             {
                 this.player = p.number;
@@ -764,6 +838,35 @@ namespace Logless
                 this.spell = p.spell;
                 this.spellIcon = p.spellIcon;
                 this.mvpScore = p.mvpScore;
+            }
+
+            public MastermindLegion(int player, string playstyle, string playstyleIcon, string spell, string spellIcon, int mvpScore)
+            {
+                this.player = player;
+                this.playstyle = playstyle;
+                this.playstyleIcon = playstyleIcon;
+                this.spell = spell;
+                this.spellIcon = spellIcon;
+                this.mvpScore = mvpScore;
+            }
+
+            public MastermindLegion(int player)
+            {
+                this.player=player;
+            }
+
+            public MastermindLegion addPlaystyle(string playstyle, string playstyleIcon)
+            {
+                this.playstyle = playstyle;
+                this.playstyleIcon = playstyleIcon;
+                return this;
+            }
+
+            public MastermindLegion addSpell(string spell, string spellIcon)
+            {
+                this.spell = spell;
+                this.spellIcon = spellIcon;
+                return this;
             }
         }
 

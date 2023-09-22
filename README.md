@@ -23,6 +23,8 @@ Any non-breaking upgrades should just be a matter of copy and replace the curren
 
 ## Changelog
 
+#### 1.2.1
+Added spectate-only rolls, mastermind, spells selected and available king spells while spectating games. Also added rolls in the post-game summary for regular games.
 #### 1.2.0
 Added spectate-only fetching of workers, value and reccomended value during the game.
 #### 1.1.18

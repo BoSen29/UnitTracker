@@ -32,6 +32,14 @@
       <HintPath>E:\SteamLibrary\steamapps\common\Legion TD 2\Legion TD 2_Data\Managed\Assembly-CSharp-firstpass.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="GameClientApi">
+      <HintPath>E:\SteamLibrary\steamapps\common\Legion TD 2\Legion TD 2_Data\Managed\GameClientApi.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="GameData">
+      <HintPath>E:\SteamLibrary\steamapps\common\Legion TD 2\Legion TD 2_Data\Managed\GameData.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <Reference Include="Natives">
       <HintPath>E:\SteamLibrary\steamapps\common\Legion TD 2\Legion TD 2_Data\Managed\Natives.dll</HintPath>
       <Private>False</Private>
