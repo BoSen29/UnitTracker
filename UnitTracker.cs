@@ -33,7 +33,7 @@ using Assets.Features.Dev;
 using System.Text.RegularExpressions;
 using UnityEngine;
 using aag.GameData.Reader;
-
+using System.Timers;
 
 namespace Logless
 {
@@ -41,12 +41,13 @@ namespace Logless
     using P = Plugin;
 
     [BepInProcess("Legion TD 2.exe")]
-    [BepInPlugin("UnitTracker", "UnitTracker", "1.0.0")]
+    [BepInPlugin("UnitTracker", "UnitTracker", "1.3.0")]
     public class Plugin : BaseUnityPlugin
     {
         private readonly Assembly _assembly = Assembly.GetExecutingAssembly();
         private readonly Harmony _harmony = new("UnitTracker");
-        private Stopwatch sp = new Stopwatch();
+        private Timer timer = new Timer();
+        private Timer eventTimer = new Timer();
         private bool _registered = false;
         private int actualWaveNumber = 0;
         private int ingameWaveNumber = 0;
@@ -98,7 +99,17 @@ namespace Logless
                 throw;
             }
             Logger.LogInfo($"Plugin {"UnitTracker"} is loaded!");
-            sp.Start();
+
+            this.timer.Interval = 20000;
+
+            this.timer.Elapsed += init;
+            this.timer.Enabled = true;
+
+
+            this.eventTimer.Interval = 1000;
+            this.eventTimer.AutoReset = true;
+            this.eventTimer.Elapsed += processEvents;
+            this.eventTimer.Enabled = true;
         }
 #nullable enable
         private QueuedItem? fetchWaveStartedInfo(List<PostGameStatsPlayerBuilds>? pgs = null, List<MastermindLegion>? legionMastermind = null)
@@ -203,365 +214,366 @@ namespace Logless
 
 #nullable disable
         void Log(string msg) {
-            Console.WriteLine("UNITTRACKER " + System.DateTime.UtcNow.ToString("yyyy-MM-dd--HH-mm-ss-ffff") + " " + msg);
+            Logger.LogInfo("UNITTRACKER " + System.DateTime.UtcNow.ToString("yyyy-MM-dd--HH-mm-ss-ffff") + " " + msg);
         }
-        public void Update()
+        public void init(object source, System.Timers.ElapsedEventArgs eArgs)
         {
             //ClientApi.IsSpectator() // returns spectator ## do some logic omg
 
-            if (!this._registered && this._configured && sp.Elapsed.TotalSeconds > 20) // guessing init time of the base class Assets.Features.Hud to prevent accidentally triggering the constructor prematurely;
-            {
-                this._registered = true;
-                Log("Registering event handlers.");
+            this._registered = true;
+            Log("Registering event handlers.");
 
-                HudApi.OnPostSetHudTheme += theme => {
-                    Log("OnPostSetHudTheme: " + theme);
-                    if (theme == "day") {
-                        if (this.waveStartSynced && !ClientApi.IsSpectator()) return;
-                        this.waveStartSynced = true;
+            HudApi.OnPostSetHudTheme += theme => {
+                Log("OnPostSetHudTheme: " + theme);
+                if (theme == "day") {
+                    if (this.waveStartSynced && !ClientApi.IsSpectator()) return;
+                    this.waveStartSynced = true;
 
-                        if (this.ingameWaveNumber < 21)
+                    if (this.ingameWaveNumber < 21)
+                    {
+                        this.actualWaveNumber = this.ingameWaveNumber;
+                    }
+                    else
+                    {
+                        if (!this.firstWaveSet)
                         {
-                            this.actualWaveNumber = this.ingameWaveNumber;
+                            this.actualWaveNumber = WaveInfo.CurrentWaveNumber;
+                            this.firstWaveSet = true;
                         }
                         else
                         {
-                            if (!this.firstWaveSet)
-                            {
-                                this.actualWaveNumber = WaveInfo.CurrentWaveNumber;
-                                this.firstWaveSet = true;
-                            }
-                            else
-                            {
-                                this.actualWaveNumber += 1;
-                            }
-
-                            if (this.actualWaveNumber <= 0)
-                            {
-                                this.actualWaveNumber = 1;
-                            }
+                            this.actualWaveNumber += 1;
                         }
-#nullable enable
-                        List<PostGameStatsPlayerBuilds>? pgs = null; 
-                        
-                        List<MastermindLegion>? legionMastermind = null;
 
-                        if (ClientApi.IsSpectator())
+                        if (this.actualWaveNumber <= 0)
                         {
-                            if (pgs == null)
-                            {
-                                pgs = new List<PostGameStatsPlayerBuilds>();
-                            }
+                            this.actualWaveNumber = 1;
+                        }
+                    }
+#nullable enable
+                    List<PostGameStatsPlayerBuilds>? pgs = null; 
+                        
+                    List<MastermindLegion>? legionMastermind = null;
+
+                    if (ClientApi.IsSpectator())
+                    {
+                        if (pgs == null)
+                        {
+                            pgs = new List<PostGameStatsPlayerBuilds>();
+                        }
+                        this.lTDPlayers.ForEach(p =>
+                        {
+                            PlayerProperties pp = Snapshot.PlayerProperties[p.player];
+                            List<string> rolls = (from roll in pp.Rolls.Get()
+                                                    select MapApi.Get("units", roll, "iconpath").Value).ToList();
+                            pgs.Add(new PostGameStatsPlayerBuilds(this.actualWaveNumber, pp.GetTowerValue(), (int)pp.GetWorkerCount(), pp.GetRecommendedValue(this.ingameWaveNumber), p.player, rolls));
+                        });
+
+                        // send the masterminds on the first available wave
+                        if (!this.sentMastermind)
+                        {
+                            legionMastermind = new List<MastermindLegion>();
+
                             this.lTDPlayers.ForEach(p =>
                             {
                                 PlayerProperties pp = Snapshot.PlayerProperties[p.player];
-                                List<string> rolls = (from roll in pp.Rolls.Get()
-                                                      select MapApi.Get("units", roll, "iconpath").Value).ToList();
-                                pgs.Add(new PostGameStatsPlayerBuilds(this.actualWaveNumber, pp.GetTowerValue(), (int)pp.GetWorkerCount(), pp.GetRecommendedValue(this.ingameWaveNumber), p.player, rolls));
+                                legionMastermind.Add(new MastermindLegion(p.player).addPlaystyle("unknown", pp.Image));
                             });
 
-                            // send the masterminds on the first available wave
-                            if (!this.sentMastermind)
+                            this.sentMastermind = true;
+                        }
+
+
+                        // send kingspells if its wave 11 or later
+                        if (!this.sentSpells && this.actualWaveNumber >= 11)
+                        {
+                            if (legionMastermind == null)
                             {
                                 legionMastermind = new List<MastermindLegion>();
-
-                                this.lTDPlayers.ForEach(p =>
-                                {
-                                    PlayerProperties pp = Snapshot.PlayerProperties[p.player];
-                                    legionMastermind.Add(new MastermindLegion(p.player).addPlaystyle("unknown", pp.Image));
-                                });
-
-                                this.sentMastermind = true;
                             }
-
-
-                            // send kingspells if its wave 11 or later
-                            if (!this.sentSpells && this.actualWaveNumber >= 11)
+                            this.lTDPlayers.ForEach(p =>
                             {
-                                if (legionMastermind == null)
-                                {
-                                    legionMastermind = new List<MastermindLegion>();
-                                }
-                                this.lTDPlayers.ForEach(p =>
-                                {
-                                    int i = legionMastermind.FindIndex(l => l.player == p.player);
-                                    MastermindLegion t = i != -1 ? legionMastermind[i] : new MastermindLegion(p.player);
-                                    PlayerProperties pp = Snapshot.PlayerProperties[p.player];
-                                    t.addSpell(pp.PowerupSelected,MapApi.Get("powerups", pp.PowerupSelected, "iconpath"));
+                                int i = legionMastermind.FindIndex(l => l.player == p.player);
+                                MastermindLegion t = i != -1 ? legionMastermind[i] : new MastermindLegion(p.player);
+                                PlayerProperties pp = Snapshot.PlayerProperties[p.player];
+                                t.addSpell(pp.PowerupSelected,MapApi.Get("powerups", pp.PowerupSelected, "iconpath"));
 
-                                    if (i == -1)
-                                    {
-                                        legionMastermind.Add(t);
-                                    }
-                                });
-                                this.sentSpells = true;
-                            }
+                                if (i == -1)
+                                {
+                                    legionMastermind.Add(t);
+                                }
+                            });
+                            this.sentSpells = true;
                         }
+                    }
 #nullable disable
 
-                        Task.Run(async () => {
+                    Task.Run(async () => {
+                        await Task.Delay(1000);
+                        var prevState = fetchWaveStartedInfo(pgs, legionMastermind);
+                        var lastState = prevState;
+                        int retries = 0;
+                        bool done = false;
+                        while (!done && retries < 6)
+                        {
                             await Task.Delay(1000);
-                            var prevState = fetchWaveStartedInfo(pgs, legionMastermind);
-                            var lastState = prevState;
-                            int retries = 0;
-                            bool done = false;
-                            while (!done && retries < 6)
+                            var newState = fetchWaveStartedInfo(pgs, legionMastermind);
+                            if (prevState == null || prevState?.serializedBody != newState?.serializedBody)
                             {
-                                await Task.Delay(1000);
-                                var newState = fetchWaveStartedInfo(pgs, legionMastermind);
-                                if (prevState == null || prevState?.serializedBody != newState?.serializedBody)
-                                {
-                                    Log("wave state has changed OR wave query was unsuccessful.");
-                                    Log("old state: " + prevState?.serializedBody);
-                                    Log("new state: " + newState?.serializedBody);
-                                    prevState = newState;
-                                }
-                                else
-                                {
-                                    Log("submitting wave state to server: " + newState?.serializedBody);
-                                    this._queue.Enqueue(newState);
-                                    done = true;
-                                }
-
-                                if (retries == 6)
-                                {
-                                    lastState = newState;
-                                }
+                                Log("wave state has changed OR wave query was unsuccessful.");
+                                Log("old state: " + prevState?.serializedBody);
+                                Log("new state: " + newState?.serializedBody);
+                                prevState = newState;
                             }
-                            if (!done)
+                            else
                             {
-                                Log("Submitting an unfinished state " + lastState?.serializedBody);
-                                this._queue.Enqueue(lastState);
+                                Log("submitting wave state to server: " + newState?.serializedBody);
+                                this._queue.Enqueue(newState);
+                                done = true;
                             }
-                        });
-                    }
-                    else {
-                        this.waveStartSynced = false;
-                    }
-                };
 
-                HudApi.OnSetWaveNumber += (i) =>
+                            if (retries == 6)
+                            {
+                                lastState = newState;
+                            }
+                        }
+                        if (!done)
+                        {
+                            Log("Submitting an unfinished state " + lastState?.serializedBody);
+                            this._queue.Enqueue(lastState);
+                        }
+                    });
+                }
+                else {
+                    this.waveStartSynced = false;
+                }
+            };
+
+            HudApi.OnSetWaveNumber += (i) =>
+            {
+                this.ingameWaveNumber = i;
+                this._waveSet = true;
+                this.units.Clear();
+                this.mercenaries.Clear();
+                int leftPercentage = 100;
+                int rightPercentage = 100;
+                try
                 {
-                    this.ingameWaveNumber = i;
-                    this._waveSet = true;
-                    this.units.Clear();
-                    this.mercenaries.Clear();
-                    int leftPercentage = 100;
-                    int rightPercentage = 100;
-                    try
-                    {
-                        UnitProperties left = Snapshot.UnitProperties[HudApi.GetHudSourceUnit(HudSection.LeftKing)];
-                        UnitProperties right = Snapshot.UnitProperties[HudApi.GetHudSourceUnit(HudSection.RightKing)];
+                    UnitProperties left = Snapshot.UnitProperties[HudApi.GetHudSourceUnit(HudSection.LeftKing)];
+                    UnitProperties right = Snapshot.UnitProperties[HudApi.GetHudSourceUnit(HudSection.RightKing)];
 
-                        leftPercentage = (int)Math.Round(left.Hp.GetLastLife(Snapshot.RenderTime) / left.Hp.GetMaxLife(Snapshot.RenderTime) * 100);
-                        rightPercentage = (int)Math.Round(right.Hp.GetLastLife(Snapshot.RenderTime) / right.Hp.GetMaxLife(Snapshot.RenderTime) * 100);
-                    }
-                    catch
-                    {
-                        Console.WriteLine("King unavailable, asuming 100%");
-                    }
+                    leftPercentage = (int)Math.Round(left.Hp.GetLastLife(Snapshot.RenderTime) / left.Hp.GetMaxLife(Snapshot.RenderTime) * 100);
+                    rightPercentage = (int)Math.Round(right.Hp.GetLastLife(Snapshot.RenderTime) / right.Hp.GetMaxLife(Snapshot.RenderTime) * 100);
+                }
+                catch
+                {
+                    Console.WriteLine("King unavailable, asuming 100%");
+                }
 
-                    if (!this.firstWaveSet)
-                    {
-                        this.actualWaveNumber = i;
-                        this.firstWaveSet = true;
-                    }
-                    else
-                    {
+                if (!this.firstWaveSet)
+                {
+                    this.actualWaveNumber = i;
+                    this.firstWaveSet = true;
+                }
+                else
+                {
                         
-                        if (this.actualWaveNumber > 1)
-                        {
-                            var payload =
-                            new QueuedItem(
-                                this.configUrl.Value,
-                                new WaveCompletedPayload(this.actualWaveNumber, leftPercentage, rightPercentage, this.leaks, false, this.matchUUID),
-                                this.configStreamDelay.Value
-                            );
-                            Log("enqueuing waveCompletedPayload: " + payload.serializedBody);
-                            this._queue.Enqueue(payload);
-                        }
-                    }
-
-                    this.leaks.Clear();
-                };
-
-                HudApi.OnRefreshPostGameBuilds += (PostGameBuildsProperties e) =>
-                {
-                    try
+                    if (this.actualWaveNumber > 1)
                     {
-                        List<PostGameStatsPlayerBuilds> data = new List<PostGameStatsPlayerBuilds>();
-                        Dictionary<int, int> indexToPlayer = new Dictionary<int, int>();
-                        int n = 0;
-
-                        // pray that the playernames is in order... ? 
-                        this.lTDPlayers.OrderBy(o => o.player).ToList().ForEach((p) =>
-                        {
-                            indexToPlayer.Add(n, p.player);
-                            n++;
-                        });
-                        Log("e.Builds.Count: " + e.builds.Count);
-
-                        //reformatted to send actual wave number in payload, rather than ingame wave number
-                        for (int i_builds = 0; i_builds < e.builds.Count; i_builds++) {
-                            for(int i_playerBuilds = 0; i_playerBuilds < e.builds[i_builds].playerBuilds.Count; i_playerBuilds++) { 
-                                try {
-                                    data.Add(new PostGameStatsPlayerBuilds(e.builds[i_builds].playerBuilds[i_playerBuilds], i_builds + 1, indexToPlayer[i_playerBuilds]));
-                                }
-                                catch (Exception ex) {
-                                    Console.WriteLine("Unable to add index for player " + i_playerBuilds);
-                                    Console.WriteLine(ex.Message);
-                                }
-                            }
-                        }
-
-                        int left = (int)Math.Round(e.builds.Last().leftKingPercentHp * 100);
-                        int right = (int)Math.Round(e.builds.Last().rightKingPercentHp * 100);
-                        int last = e.builds.Last().number;
-
-                        var payload = new QueuedItem(configUrl.Value, new PostGameStatsPayload(data, left, right, last, this.matchUUID), configStreamDelay.Value);
-                        Log("Queueing up a postmatch build summary: " + payload.serializedBody);
+                        var payload =
+                        new QueuedItem(
+                            this.configUrl.Value,
+                            new WaveCompletedPayload(this.actualWaveNumber, leftPercentage, rightPercentage, this.leaks, false, this.matchUUID),
+                            this.configStreamDelay.Value
+                        );
+                        Log("enqueuing waveCompletedPayload: " + payload.serializedBody);
                         this._queue.Enqueue(payload);
                     }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine("ISSUES IN THE POSTGAMEBUILDS THINGY!");
-                        Console.WriteLine(ex.Message);
-                    }
-                };
+                }
 
-                HudApi.OnRefreshPostGameStats += (PostGameStatsProperties e) =>
+                this.leaks.Clear();
+            };
+
+            HudApi.OnRefreshPostGameBuilds += (PostGameBuildsProperties e) =>
+            {
+                try
                 {
-                    Console.WriteLine("PostGameStatsRefreshed, asuming the game ended? Sending final payload.");
-                    
-                    List<MastermindLegion> lmlist = new List<MastermindLegion>();
+                    List<PostGameStatsPlayerBuilds> data = new List<PostGameStatsPlayerBuilds>();
+                    Dictionary<int, int> indexToPlayer = new Dictionary<int, int>();
+                    int n = 0;
 
-                    e.leftTeamRows.ForEach(p =>
+                    // pray that the playernames is in order... ? 
+                    this.lTDPlayers.OrderBy(o => o.player).ToList().ForEach((p) =>
                     {
-                        lmlist.Add(new MastermindLegion(p));
+                        indexToPlayer.Add(n, p.player);
+                        n++;
                     });
+                    Log("e.Builds.Count: " + e.builds.Count);
 
-                    e.rightTeamRows.ForEach(p =>
-                    {
-                        lmlist.Add(new MastermindLegion(p));
-                    });
-
-                    if (e.gameId == this.matchUUID)
-                    {
-                        var payload = new QueuedItem(this.configUrl.Value, new GameCompletedPayload(this.actualWaveNumber, this.leaks, true, this.matchUUID, lmlist), configStreamDelay.Value);
-                        Log("Enqueuing final payload: " + payload.serializedBody);
-                        this._queue.Enqueue(payload);
-                    }
-                    else
-                    {
-                        Console.WriteLine("Found some postmatch info that has unknown origin, please advice.");
-                    }                    
-                };
-
-                HudApi.OnEnteredGame += (SimpleEvent)delegate
-                {
-                    Console.WriteLine("Entered new game, fetching players.");
-                    this.sentMastermind = false;
-                    this.sentSpells = false;
-
-                    this.actualWaveNumber = 0;
-                    this.firstWaveSet = false;
-
-                    this.matchUUID = ClientApi.GetServerLogURL().Split('/').Last(); // should return gameid from ConfigApi.GameId which is internal.
-
-                    this.lTDPlayers.ForEach(p => p.found = false);
-                    foreach(ushort player in PlayerApi.GetPlayingPlayers())
-                    {
-                        int p = this.lTDPlayers.FindIndex(p => p.player == player);
-                        LTDPlayer t = p != -1 ? this.lTDPlayers[p] : new LTDPlayer();
-
-                        t.found = true;
-
-
-                        if (p == -1)
-                        {
-                            t.image = Snapshot.PlayerProperties[player].Image.Get();
-                            GuildEntityObjectProperties guild = Snapshot.PlayerProperties[player].GuildProperties;
-                            t.name = Snapshot.PlayerProperties[player].Name;
-                            t.countryCode = Snapshot.PlayerProperties[player].CountryCode;
-                            t.countryName = Countries.GetCountry(t.countryCode).name;
-                            t.guildAvatar = guild.avatar;
-                            t.player = player;
-                            if (!string.IsNullOrEmpty(t.name) || t.name != "_open" || t.name != "_closed" || t.player < 9 && t.player > 0 || t.name != "(Closed)") {
-                                this.lTDPlayers.Add(t);
+                    //reformatted to send actual wave number in payload, rather than ingame wave number
+                    for (int i_builds = 0; i_builds < e.builds.Count; i_builds++) {
+                        for(int i_playerBuilds = 0; i_playerBuilds < e.builds[i_builds].playerBuilds.Count; i_playerBuilds++) { 
+                            try {
+                                data.Add(new PostGameStatsPlayerBuilds(e.builds[i_builds].playerBuilds[i_playerBuilds], i_builds + 1, indexToPlayer[i_playerBuilds]));
+                            }
+                            catch (Exception ex) {
+                                Console.WriteLine("Unable to add index for player " + i_playerBuilds);
+                                Console.WriteLine(ex.Message);
                             }
                         }
-                        else
-                        {
-                            t.name = Snapshot.PlayerProperties[player].Name;
-                            t.countryCode = Snapshot.PlayerProperties[player].CountryCode;
-                            t.countryName = Countries.GetCountry(t.countryCode).name;
-                            GuildEntityObjectProperties guild = Snapshot.PlayerProperties[player].GuildProperties;
-                            t.guildAvatar = guild.avatar;
-                            t.guild = guild.guildName;
-                        }
                     }
-                    this.units.Clear();
-                    this.mercenaries.Clear();
 
-                    this.lTDPlayers.RemoveAll(p => p.found != true);
+                    int left = (int)Math.Round(e.builds.Last().leftKingPercentHp * 100);
+                    int right = (int)Math.Round(e.builds.Last().rightKingPercentHp * 100);
+                    int last = e.builds.Last().number;
 
-                    int leftPercentage = 100;
-                    int rightPercentage = 100;
-
-                    List<string> source = Snapshot.PlayerProperties[ClientApi.GetLocalPlayer()].PowerupChoices.Get().ToList();
-
-                    List<string> powerupChoices = source.Select((string powerup) => MapApi.Get("powerups", powerup, "iconpath").Value).ToList();
-
-                    var payload = new QueuedItem(this.configUrl.Value, new MatchJoinedPayload(this.lTDPlayers, 0, this.matchUUID, leftPercentage, rightPercentage, powerupChoices), this.configStreamDelay.Value);
-                    Log("Enqueuing new game payload: " + payload.serializedBody);
+                    var payload = new QueuedItem(configUrl.Value, new PostGameStatsPayload(data, left, right, last, this.matchUUID), configStreamDelay.Value);
+                    Log("Queueing up a postmatch build summary: " + payload.serializedBody);
                     this._queue.Enqueue(payload);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("ISSUES IN THE POSTGAMEBUILDS THINGY!");
+                    Console.WriteLine(ex.Message);
+                }
+            };
 
+            HudApi.OnRefreshPostGameStats += (PostGameStatsProperties e) =>
+            {
+                Console.WriteLine("PostGameStatsRefreshed, asuming the game ended? Sending final payload.");
+                    
+                List<MastermindLegion> lmlist = new List<MastermindLegion>();
 
-                    // this.postData(new Payload(this.lTDPlayers, this.waveNumber, this.matchUUID)); // intentional non-awaiting async task to prevent hanging up the core thread.
+                e.leftTeamRows.ForEach(p =>
+                {
+                    lmlist.Add(new MastermindLegion(p));
+                });
 
-                };
+                e.rightTeamRows.ForEach(p =>
+                {
+                    lmlist.Add(new MastermindLegion(p));
+                });
 
-                HudApi.OnRefreshSticker += (props) => {
-                    if (string.IsNullOrEmpty(props.name) || props.name == "_open" || props.name == "_closed" || props.player > 8) { return; }
-                    int p = this.lTDPlayers.FindIndex(p => p.player == props.player);
-                    LTDPlayer t = p != -1? this.lTDPlayers[p] :new LTDPlayer();
-                    t.rating = props.rating;
-                    t.player = props.player;
-                    t.guildAvatar = props.guildAvatar;
-                    t.guild = props.guild;
-                    t.image = props.image;
-                    t.countryName = Countries.GetCountry(t.countryCode).name;
+                if (e.gameId == this.matchUUID)
+                {
+                    var payload = new QueuedItem(this.configUrl.Value, new GameCompletedPayload(this.actualWaveNumber, this.leaks, true, this.matchUUID, lmlist), configStreamDelay.Value);
+                    Log("Enqueuing final payload: " + payload.serializedBody);
+                    this._queue.Enqueue(payload);
+                }
+                else
+                {
+                    Console.WriteLine("Found some postmatch info that has unknown origin, please advice.");
+                }                    
+            };
+
+            HudApi.OnEnteredGame += (SimpleEvent)delegate
+            {
+                Console.WriteLine("Entered new game, fetching players.");
+                this.sentMastermind = false;
+                this.sentSpells = false;
+
+                this.actualWaveNumber = 0;
+                this.firstWaveSet = false;
+
+                this.matchUUID = ClientApi.GetServerLogURL().Split('/').Last(); // should return gameid from ConfigApi.GameId which is internal.
+
+                this.lTDPlayers.ForEach(p => p.found = false);
+                foreach(ushort player in PlayerApi.GetPlayingPlayers())
+                {
+                    int p = this.lTDPlayers.FindIndex(p => p.player == player);
+                    LTDPlayer t = p != -1 ? this.lTDPlayers[p] : new LTDPlayer();
+
+                    t.found = true;
+
 
                     if (p == -1)
                     {
-                        this.lTDPlayers.Add(t);
+                        t.image = Snapshot.PlayerProperties[player].Image.Get();
+                        GuildEntityObjectProperties guild = Snapshot.PlayerProperties[player].GuildProperties;
+                        t.name = Snapshot.PlayerProperties[player].Name;
+                        t.countryCode = Snapshot.PlayerProperties[player].CountryCode;
+                        t.countryName = Countries.GetCountry(t.countryCode).name;
+                        t.guildAvatar = guild.avatar;
+                        t.player = player;
+                        if (!string.IsNullOrEmpty(t.name) || t.name != "_open" || t.name != "_closed" || t.player < 9 && t.player > 0 || t.name != "(Closed)") {
+                            this.lTDPlayers.Add(t);
+                        }
                     }
-                    
-                };
-
-                HudApi.OnDisplayGameText += (string header, string content, float duration, string image) =>
-                {
-                    if (content.Contains("leak"))
+                    else
                     {
-                        try
-                        {
-                            this.leaks.Add(new Leaks(
-                                int.Parse(content.Split('%')[0].Split('(').Last()),
-                                int.Parse(content.Split(')')[0].Split('(')[1])
-                                ));
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine("Issues parsing a leak... :seenoevil:");
-                            Console.WriteLine(ex.Message);
-                        }
-                        Console.WriteLine("Leak registered!");
-                        Console.WriteLine(content);
+                        t.name = Snapshot.PlayerProperties[player].Name;
+                        t.countryCode = Snapshot.PlayerProperties[player].CountryCode;
+                        t.countryName = Countries.GetCountry(t.countryCode).name;
+                        GuildEntityObjectProperties guild = Snapshot.PlayerProperties[player].GuildProperties;
+                        t.guildAvatar = guild.avatar;
+                        t.guild = guild.guildName;
                     }
-                };
+                }
+                this.units.Clear();
+                this.mercenaries.Clear();
 
-                sp.Stop();
-            }
+                this.lTDPlayers.RemoveAll(p => p.found != true);
+
+                int leftPercentage = 100;
+                int rightPercentage = 100;
+
+                List<string> source = Snapshot.PlayerProperties[ClientApi.GetLocalPlayer()].PowerupChoices.Get().ToList();
+
+                List<string> powerupChoices = source.Select((string powerup) => MapApi.Get("powerups", powerup, "iconpath").Value).ToList();
+
+                var payload = new QueuedItem(this.configUrl.Value, new MatchJoinedPayload(this.lTDPlayers, 0, this.matchUUID, leftPercentage, rightPercentage, powerupChoices), this.configStreamDelay.Value);
+                Log("Enqueuing new game payload: " + payload.serializedBody);
+                this._queue.Enqueue(payload);
+
+
+                // this.postData(new Payload(this.lTDPlayers, this.waveNumber, this.matchUUID)); // intentional non-awaiting async task to prevent hanging up the core thread.
+
+            };
+
+            HudApi.OnRefreshSticker += (props) => {
+                if (string.IsNullOrEmpty(props.name) || props.name == "_open" || props.name == "_closed" || props.player > 8) { return; }
+                int p = this.lTDPlayers.FindIndex(p => p.player == props.player);
+                LTDPlayer t = p != -1? this.lTDPlayers[p] :new LTDPlayer();
+                t.rating = props.rating;
+                t.player = props.player;
+                t.guildAvatar = props.guildAvatar;
+                t.guild = props.guild;
+                t.image = props.image;
+                t.countryName = Countries.GetCountry(t.countryCode).name;
+
+                if (p == -1)
+                {
+                    this.lTDPlayers.Add(t);
+                }
+                    
+            };
+
+            HudApi.OnDisplayGameText += (string header, string content, float duration, string image) =>
+            {
+                if (content.Contains("leak"))
+                {
+                    try
+                    {
+                        this.leaks.Add(new Leaks(
+                            int.Parse(content.Split('%')[0].Split('(').Last()),
+                            int.Parse(content.Split(')')[0].Split('(')[1])
+                            ));
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("Issues parsing a leak... :seenoevil:");
+                        Console.WriteLine(ex.Message);
+                    }
+                    Console.WriteLine("Leak registered!");
+                    Console.WriteLine(content);
+                }
+            };
+
+            this.timer.Enabled = false;
+        }
+
+        public void processEvents (object sender, ElapsedEventArgs e)
+        {
             if (this._queue.Count > 0 && this._queue.First().runAfter < DateTime.Now)
             {
                 PostToUrl(this._queue.Dequeue());
