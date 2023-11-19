@@ -60,6 +60,7 @@ namespace Logless
         private ConfigEntry<string> configUrl;
         private ConfigEntry<string> configJwt;
         private ConfigEntry<int> configStreamDelay;
+        private ConfigEntry<bool> configShowTTL;
         private int maxUnitsSeen = 0;
         private bool _shouldPost = false;
         private string matchUUID = "";
@@ -70,11 +71,13 @@ namespace Logless
         private bool firstWaveSet = false;
         private bool sentMastermind = false;
         private bool sentSpells = false;
+        private Stopwatch waveElapsedStopWatch = new Stopwatch();
 
         public void Awake() {
             configUrl = Config.Bind("General", "UpdateURL", "https://ltd2.krettur.no/v2/update", "HTTPS endpoint to post on waveStarted event, default is the extension used by the Twitch Overlay.");
             configJwt = Config.Bind("General", "JWT", "", "JWT to authenticate your data, reach out to @bosen in discord to get your token for the Twitch Overlay.");
-            configStreamDelay = Config.Bind("General", "StreamDelay", 0, "Delay before data is pushed, in seconds. Set this equal to the delay configued in OBS / Stream Labs to prevent the overlay showing information from the future");;
+            configStreamDelay = Config.Bind("General", "StreamDelay", 0, "Delay before data is pushed, in seconds. Set this equal to the delay configued in OBS / Stream Labs to prevent the overlay showing information from the future");
+            configShowTTL = Config.Bind("General", "ShowTTL", true, "Wether or not to show the time it took a player to leak in game via the HUD");
 
             if (String.IsNullOrEmpty(configJwt.Value))
             {
@@ -86,6 +89,7 @@ namespace Logless
                 Console.WriteLine("Missing target URL, skipping patching.");
                 return;
             }
+            this.waveElapsedStopWatch.Start();
 
             try
             {
@@ -226,6 +230,7 @@ namespace Logless
             HudApi.OnPostSetHudTheme += theme => {
                 Log("OnPostSetHudTheme: " + theme);
                 if (theme == "day") {
+                    this.waveElapsedStopWatch.Restart();
                     if (this.waveStartSynced && !ClientApi.IsSpectator()) return;
                     this.waveStartSynced = true;
 
@@ -550,14 +555,41 @@ namespace Logless
 
             HudApi.OnDisplayGameText += (string header, string content, float duration, string image) =>
             {
-                if (content.Contains("leak"))
+                if (content.Contains("cleared"))
                 {
+                    //Log("header " + header + " content: " + content);
+                }
+                if (content.Contains("player_cleared_lane"))
+                {
+                    // {"apexId":"player_cleared_lane","customStringDynamicOverrides":["|player(1)"]}
                     try
                     {
+                        if (configShowTTL.Value == true)
+                        {
+                            HudApi.DisplayGameText("This is a header", @$"{content.Split('[')[1].Split(']')[0].Replace("\"", "")} cleared in {Math.Round(this.waveElapsedStopWatch.Elapsed.TotalSeconds, 1)} seconds.", 10f, image);
+                        }
+                        
+                    }
+                    catch (Exception ex)
+                    {
+                        Log("Issues parsing a clear :O");
+                        Log(ex.Message);
+                    }
+                }
+                if (content.Contains("leak"))
+                {
+                    // |player(1) leaked |c(ff8800):(50%)|r
+                    try
+                    {
+                        int player = int.Parse(content.Split(')')[0].Split('(')[1]);
                         this.leaks.Add(new Leaks(
-                            int.Parse(content.Split('%')[0].Split('(').Last()),
-                            int.Parse(content.Split(')')[0].Split('(')[1])
-                            ));
+                        int.Parse(content.Split('%')[0].Split('(').Last()),
+                            player)
+                        );
+                        if (configShowTTL.Value == true)
+                        {
+                            HudApi.DisplayGameText("This is a header", @$"|player({player}) leaked in {Math.Round(this.waveElapsedStopWatch.Elapsed.TotalSeconds, 1)} seconds.", 10f, image);
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -566,6 +598,8 @@ namespace Logless
                     }
                     Console.WriteLine("Leak registered!");
                     Console.WriteLine(content);
+
+
                 }
             };
 
