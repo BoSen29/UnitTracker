@@ -41,7 +41,7 @@ namespace Logless
     using P = Plugin;
 
     [BepInProcess("Legion TD 2.exe")]
-    [BepInPlugin("UnitTracker", "UnitTracker", "1.3.0")]
+    [BepInPlugin("UnitTracker", "UnitTracker", "1.4.0")]
     public class Plugin : BaseUnityPlugin
     {
         private readonly Assembly _assembly = Assembly.GetExecutingAssembly();
@@ -73,11 +73,12 @@ namespace Logless
         private bool sentSpells = false;
         private Stopwatch waveElapsedStopWatch = new Stopwatch();
 
-        public void Awake() {
+        public void Awake()
+        {
             configUrl = Config.Bind("General", "UpdateURL", "https://ltd2.krettur.no/v2/update", "HTTPS endpoint to post on waveStarted event, default is the extension used by the Twitch Overlay.");
             configJwt = Config.Bind("General", "JWT", "", "JWT to authenticate your data, reach out to @bosen in discord to get your token for the Twitch Overlay.");
             configStreamDelay = Config.Bind("General", "StreamDelay", 0, "Delay before data is pushed, in seconds. Set this equal to the delay configued in OBS / Stream Labs to prevent the overlay showing information from the future");
-            configShowTTL = Config.Bind("General", "ShowTTL", true, "Wether or not to show the time it took a player to leak in game via the HUD");
+            configShowTTL = Config.Bind("General", "ShowTTL", true, "Whether or not to show the time it took a player to leak in game via the HUD");
 
             if (String.IsNullOrEmpty(configJwt.Value))
             {
@@ -116,8 +117,9 @@ namespace Logless
             this.eventTimer.Enabled = true;
         }
 #nullable enable
-        private QueuedItem? fetchWaveStartedInfo(List<PostGameStatsPlayerBuilds>? pgs = null, List<MastermindLegion>? legionMastermind = null)
+        private QueuedItem? fetchWaveStartedInfo(List<MastermindLegion>? legionMastermind = null)
         {
+            List<PostGameStatsPlayerBuilds> pgs = new List<PostGameStatsPlayerBuilds>();
             List<MythiumRecceived> mythium = new List<MythiumRecceived>();
             try
             {
@@ -129,7 +131,7 @@ namespace Logless
 
                     Dictionary<IntVector2, Scoreboard.ScoreboardGridData> data = Scoreboard.GetGridData(p);
 
-                    
+
                     //commented out, if a player sold all fighters state should still be updated
                     //if(data.Count < 1)
                     //{
@@ -176,7 +178,7 @@ namespace Logless
 
                 return null;
             }
-            
+
 
             int leftPercentage = 100;
             int rightPercentage = 100;
@@ -199,6 +201,21 @@ namespace Logless
             }
             Log("wave query was successfull.");
             WaveStartedPayload wsp = new WaveStartedPayload(this.actualWaveNumber, this.matchUUID, this.units, this.mercenaries, mythium, leftPercentage, rightPercentage);
+            this.lTDPlayers.ForEach(p =>
+            {
+                List<string> rolls;
+                PlayerProperties pp = Snapshot.PlayerProperties[p.player];
+                if (ClientApi.IsSpectator())
+                {
+                    rolls = (from roll in pp.Rolls.Get()
+                             select MapApi.Get("units", roll, "iconpath").Value).ToList();
+                }
+                else
+                {
+                    rolls = new List<string>();
+                }
+                pgs.Add(new PostGameStatsPlayerBuilds(this.actualWaveNumber, pp.GetTowerValue(), (ClientApi.IsSpectator() ? pp.GetWorkerCount() : null), pp.GetRecommendedValue(this.ingameWaveNumber), p.player, rolls));
+            });
             if (pgs != null)
             {
                 wsp = wsp.AddPostGameStatsPlayerbuilds(pgs);
@@ -213,11 +230,12 @@ namespace Logless
                     wsp,
                     configStreamDelay.Value
                 );
-            
+
         }
 
 #nullable disable
-        void Log(string msg) {
+        void Log(string msg)
+        {
             Logger.LogInfo("UNITTRACKER " + System.DateTime.UtcNow.ToString("yyyy-MM-dd--HH-mm-ss-ffff") + " " + msg);
         }
         public void init(object source, System.Timers.ElapsedEventArgs eArgs)
@@ -227,9 +245,11 @@ namespace Logless
             this._registered = true;
             Log("Registering event handlers.");
 
-            HudApi.OnPostSetHudTheme += theme => {
+            HudApi.OnPostSetHudTheme += theme =>
+            {
                 Log("OnPostSetHudTheme: " + theme);
-                if (theme == "day") {
+                if (theme == "day")
+                {
                     this.waveElapsedStopWatch.Restart();
                     if (this.waveStartSynced && !ClientApi.IsSpectator()) return;
                     this.waveStartSynced = true;
@@ -256,25 +276,11 @@ namespace Logless
                         }
                     }
 #nullable enable
-                    List<PostGameStatsPlayerBuilds>? pgs = null; 
-                        
                     List<MastermindLegion>? legionMastermind = null;
 
+                    // send the masterminds on the first available wave
                     if (ClientApi.IsSpectator())
                     {
-                        if (pgs == null)
-                        {
-                            pgs = new List<PostGameStatsPlayerBuilds>();
-                        }
-                        this.lTDPlayers.ForEach(p =>
-                        {
-                            PlayerProperties pp = Snapshot.PlayerProperties[p.player];
-                            List<string> rolls = (from roll in pp.Rolls.Get()
-                                                    select MapApi.Get("units", roll, "iconpath").Value).ToList();
-                            pgs.Add(new PostGameStatsPlayerBuilds(this.actualWaveNumber, pp.GetTowerValue(), (int)pp.GetWorkerCount(), pp.GetRecommendedValue(this.ingameWaveNumber), p.player, rolls));
-                        });
-
-                        // send the masterminds on the first available wave
                         if (!this.sentMastermind)
                         {
                             legionMastermind = new List<MastermindLegion>();
@@ -301,7 +307,7 @@ namespace Logless
                                 int i = legionMastermind.FindIndex(l => l.player == p.player);
                                 MastermindLegion t = i != -1 ? legionMastermind[i] : new MastermindLegion(p.player);
                                 PlayerProperties pp = Snapshot.PlayerProperties[p.player];
-                                t.addSpell(pp.PowerupSelected,MapApi.Get("powerups", pp.PowerupSelected, "iconpath"));
+                                t.addSpell(pp.PowerupSelected, MapApi.Get("powerups", pp.PowerupSelected, "iconpath"));
 
                                 if (i == -1)
                                 {
@@ -311,18 +317,20 @@ namespace Logless
                             this.sentSpells = true;
                         }
                     }
+
 #nullable disable
 
-                    Task.Run(async () => {
+                    Task.Run(async () =>
+                    {
                         await Task.Delay(1000);
-                        var prevState = fetchWaveStartedInfo(pgs, legionMastermind);
+                        var prevState = fetchWaveStartedInfo(legionMastermind);
                         var lastState = prevState;
                         int retries = 0;
                         bool done = false;
                         while (!done && retries < 6)
                         {
                             await Task.Delay(1000);
-                            var newState = fetchWaveStartedInfo(pgs, legionMastermind);
+                            var newState = fetchWaveStartedInfo(legionMastermind);
                             if (prevState == null || prevState?.serializedBody != newState?.serializedBody)
                             {
                                 Log("wave state has changed OR wave query was unsuccessful.");
@@ -349,7 +357,8 @@ namespace Logless
                         }
                     });
                 }
-                else {
+                else
+                {
                     this.waveStartSynced = false;
                 }
             };
@@ -382,7 +391,7 @@ namespace Logless
                 }
                 else
                 {
-                        
+
                     if (this.actualWaveNumber > 1)
                     {
                         var payload =
@@ -416,12 +425,16 @@ namespace Logless
                     Log("e.Builds.Count: " + e.builds.Count);
 
                     //reformatted to send actual wave number in payload, rather than ingame wave number
-                    for (int i_builds = 0; i_builds < e.builds.Count; i_builds++) {
-                        for(int i_playerBuilds = 0; i_playerBuilds < e.builds[i_builds].playerBuilds.Count; i_playerBuilds++) { 
-                            try {
+                    for (int i_builds = 0; i_builds < e.builds.Count; i_builds++)
+                    {
+                        for (int i_playerBuilds = 0; i_playerBuilds < e.builds[i_builds].playerBuilds.Count; i_playerBuilds++)
+                        {
+                            try
+                            {
                                 data.Add(new PostGameStatsPlayerBuilds(e.builds[i_builds].playerBuilds[i_playerBuilds], i_builds + 1, indexToPlayer[i_playerBuilds]));
                             }
-                            catch (Exception ex) {
+                            catch (Exception ex)
+                            {
                                 Console.WriteLine("Unable to add index for player " + i_playerBuilds);
                                 Console.WriteLine(ex.Message);
                             }
@@ -446,7 +459,7 @@ namespace Logless
             HudApi.OnRefreshPostGameStats += (PostGameStatsProperties e) =>
             {
                 Console.WriteLine("PostGameStatsRefreshed, asuming the game ended? Sending final payload.");
-                    
+
                 List<MastermindLegion> lmlist = new List<MastermindLegion>();
 
                 e.leftTeamRows.ForEach(p =>
@@ -468,7 +481,7 @@ namespace Logless
                 else
                 {
                     Console.WriteLine("Found some postmatch info that has unknown origin, please advice.");
-                }                    
+                }
             };
 
             HudApi.OnEnteredGame += (SimpleEvent)delegate
@@ -483,7 +496,7 @@ namespace Logless
                 this.matchUUID = ClientApi.GetServerLogURL().Split('/').Last(); // should return gameid from ConfigApi.GameId which is internal.
 
                 this.lTDPlayers.ForEach(p => p.found = false);
-                foreach(ushort player in PlayerApi.GetPlayingPlayers())
+                foreach (ushort player in PlayerApi.GetPlayingPlayers())
                 {
                     int p = this.lTDPlayers.FindIndex(p => p.player == player);
                     LTDPlayer t = p != -1 ? this.lTDPlayers[p] : new LTDPlayer();
@@ -500,7 +513,8 @@ namespace Logless
                         t.countryName = Countries.GetCountry(t.countryCode).name;
                         t.guildAvatar = guild.avatar;
                         t.player = player;
-                        if (!string.IsNullOrEmpty(t.name) || t.name != "_open" || t.name != "_closed" || t.player < 9 && t.player > 0 || t.name != "(Closed)") {
+                        if (!string.IsNullOrEmpty(t.name) || t.name != "_open" || t.name != "_closed" || t.player < 9 && t.player > 0 || t.name != "(Closed)")
+                        {
                             this.lTDPlayers.Add(t);
                         }
                     }
@@ -535,10 +549,11 @@ namespace Logless
 
             };
 
-            HudApi.OnRefreshSticker += (props) => {
+            HudApi.OnRefreshSticker += (props) =>
+            {
                 if (string.IsNullOrEmpty(props.name) || props.name == "_open" || props.name == "_closed" || props.player > 8) { return; }
                 int p = this.lTDPlayers.FindIndex(p => p.player == props.player);
-                LTDPlayer t = p != -1? this.lTDPlayers[p] :new LTDPlayer();
+                LTDPlayer t = p != -1 ? this.lTDPlayers[p] : new LTDPlayer();
                 t.rating = props.rating;
                 t.player = props.player;
                 t.guildAvatar = props.guildAvatar;
@@ -550,7 +565,7 @@ namespace Logless
                 {
                     this.lTDPlayers.Add(t);
                 }
-                    
+
             };
 
             HudApi.OnDisplayGameText += (string header, string content, float duration, string image) =>
@@ -568,7 +583,7 @@ namespace Logless
                         {
                             HudApi.DisplayGameText("This is a header", @$"{content.Split('[')[1].Split(']')[0].Replace("\"", "")} cleared in {Math.Round(this.waveElapsedStopWatch.Elapsed.TotalSeconds, 1)} seconds.", 10f, image);
                         }
-                        
+
                     }
                     catch (Exception ex)
                     {
@@ -606,7 +621,7 @@ namespace Logless
             this.timer.Enabled = false;
         }
 
-        public void processEvents (object sender, ElapsedEventArgs e)
+        public void processEvents(object sender, ElapsedEventArgs e)
         {
             if (this._queue.Count > 0 && this._queue.First().runAfter < DateTime.Now)
             {
@@ -713,7 +728,7 @@ namespace Logless
             public int wave; // the wave it actually ended on.
             public string matchUUID;
 
-            public PostGameStatsPayload(List<PostGameStatsPlayerBuilds> stats, int leftKingHP, int rightKingHP, int wave ,string matchUUID)
+            public PostGameStatsPayload(List<PostGameStatsPlayerBuilds> stats, int leftKingHP, int rightKingHP, int wave, string matchUUID)
             {
                 this.stats = stats;
                 this.leftKingHP = leftKingHP;
@@ -727,7 +742,9 @@ namespace Logless
         {
             public int wave;
             public int fighterValue;
-            public int workers;
+
+            [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+            public float workers;
             public int recommendedValue;
             public List<string> unitsLeaked;
             public int player;
@@ -736,18 +753,21 @@ namespace Logless
             {
                 this.wave = waveNumber;
                 this.fighterValue = p.fightersValue;
-                this.workers = p.workers;
+                this.workers = (float)Math.Round((decimal)p.workers, 2);
                 this.recommendedValue = p.recommendedValue;
                 this.unitsLeaked = p.unitsLeaked;
                 this.player = player;
                 this.rolls = p.rolls;
             }
 
-            public PostGameStatsPlayerBuilds(int wave, int figherValue, int workers, int recommendedValue, int player, List<string> rolls)
+            public PostGameStatsPlayerBuilds(int wave, int figherValue, float? workers, int recommendedValue, int player, List<string> rolls)
             {
                 this.wave = wave;
                 this.fighterValue = figherValue;
-                this.workers = workers;
+                if (workers != null)
+                {
+                    this.workers = (float)Math.Round((decimal)workers, 2);
+                }
                 this.recommendedValue = recommendedValue;
                 this.player = player;
                 this.rolls = rolls;
@@ -756,7 +776,7 @@ namespace Logless
 
         public class LTDPlayer
         {
-            #nullable enable
+#nullable enable
             public int player { get; set; }
             public string? name { get; set; }
             public string? guild { get; set; }
@@ -777,9 +797,9 @@ namespace Logless
         {
             public string image { get; set; }
             public int player { get; set; }
-            
-            public int count { get;set; }
-            public Recceived (string image, int player, int count)
+
+            public int count { get; set; }
+            public Recceived(string image, int player, int count)
             {
                 this.image = image;
                 this.player = player;
@@ -796,12 +816,12 @@ namespace Logless
             public List<MythiumRecceived> recceivedAmount;
             public int leftKingWaveStartHP;
             public int rightKingWaveStartHP;
-            [JsonProperty(NullValueHandling=NullValueHandling.Ignore)]
+            [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
             public List<PostGameStatsPlayerBuilds>? stats;
             [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
             public List<MastermindLegion>? legionMastermind;
 
-            public WaveStartedPayload(int wave, string matchUUID, List<Unit>units, List<Recceived>received, List<MythiumRecceived> recceivedAmount, int leftPercentage, int rightPercentage)
+            public WaveStartedPayload(int wave, string matchUUID, List<Unit> units, List<Recceived> received, List<MythiumRecceived> recceivedAmount, int leftPercentage, int rightPercentage)
             {
                 this.units = units;
                 this.recceived = received;
@@ -818,7 +838,7 @@ namespace Logless
                 return this;
             }
 
-            public WaveStartedPayload AddLegionMastermind(List<MastermindLegion>legionMastermind)
+            public WaveStartedPayload AddLegionMastermind(List<MastermindLegion> legionMastermind)
             {
                 this.legionMastermind = legionMastermind;
                 return this;
@@ -827,7 +847,7 @@ namespace Logless
 
         public class WaveCompletedPayload
         {
-            public string matchUUID; 
+            public string matchUUID;
             public int wave;
             public int leftKingHP;
             public int rightKingHP;
@@ -898,7 +918,7 @@ namespace Logless
 
             public MastermindLegion(int player)
             {
-                this.player=player;
+                this.player = player;
             }
 
             public MastermindLegion addPlaystyle(string playstyle, string playstyleIcon)
@@ -948,15 +968,18 @@ namespace Logless
             }
         }
 
-        public void OnDestroy() {
+        public void OnDestroy()
+        {
             UnPatch();
         }
 
-        private void Patch() {
+        private void Patch()
+        {
             _harmony.PatchAll(_assembly);
         }
 
-        private void UnPatch() {
+        private void UnPatch()
+        {
             _harmony.UnpatchSelf();
         }
 

@@ -22,6 +22,10 @@ Note: the Overlay in Twitch needs to be configured to match the identity provide
 Any non-breaking upgrades should just be a matter of copy and replace the current UnitTracker.dll with a new one. Any breaking changes requiring a different approach will be documented with the release.
 
 ## Changelog
+#### 1.4.0
+Fixed issues with the version 11 of the game, along with added value + reccommended value whilst playing.
+#### 1.3.2
+Fixed typo in config-description for TTL (Wether != Wheter). Thanks to PennyWise for proof-reading.
 #### 1.3.1
 Added HUD message containing the Time To Leak (TTL) ingame, future versions will include this data in the overlay.
 #### 1.3.0 
