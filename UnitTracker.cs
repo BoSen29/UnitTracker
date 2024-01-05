@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
@@ -10,29 +9,16 @@ using BepInEx;
 using HarmonyLib;
 using aag.Natives;
 using aag.Natives.Lib.Primitives;
-using Assets;
-using Assets.Features.Core;
-using Assets.Features.Gameplay;
 using Assets.Api;
-using aag.Natives.Lib.Matchmaking.Common;
 using aag.Natives.Api;
 using aag.Natives.Lib.ViewObjects;
 using aag.Natives.Lib.Guilds;
 using aag.Natives.Lib.Misc;
 using Newtonsoft.Json;
-using UnityEngine.Networking.Match;
-using aag.Natives.Lib.Matchmaking.RatingCalculators;
 using System.Net.Http;
 using System.Text;
-using System.Net.Sockets;
-using System.IO;
-using aag.Natives.Lib.Networking.Messages;
 using BepInEx.Configuration;
 using aag.Natives.Lib.Properties;
-using Assets.Features.Dev;
-using System.Text.RegularExpressions;
-using UnityEngine;
-using aag.GameData.Reader;
 using System.Timers;
 
 namespace Logless
@@ -41,7 +27,7 @@ namespace Logless
     using P = Plugin;
 
     [BepInProcess("Legion TD 2.exe")]
-    [BepInPlugin("UnitTracker", "UnitTracker", "1.4.0")]
+    [BepInPlugin("UnitTracker", "UnitTracker", "1.4.1")]
     public class Plugin : BaseUnityPlugin
     {
         private readonly Assembly _assembly = Assembly.GetExecutingAssembly();
@@ -625,7 +611,7 @@ namespace Logless
         {
             if (this._queue.Count > 0 && this._queue.First().runAfter < DateTime.Now)
             {
-                PostToUrl(this._queue.Dequeue());
+                PostToUrl(this._queue.Dequeue()).ConfigureAwait(false);
             }
         }
 
